@@ -36,6 +36,8 @@
   --accent-soft: #e7f0ed;
   --accent-text: #14503f;
   --star: #c8891b;
+  --anno: #e07b2c;          /* 批注徽标：橙底白字 */
+  --anno-pop: #2b2c31;      /* 批注气泡：深底白字 */
   --danger: #b0442f;
   --a-grade: #2c7a4b;
   --b-grade: #a5731a;
@@ -72,6 +74,8 @@
   --accent-soft: #16302b;
   --accent-text: #7fe0c8;
   --star: #e0aa3c;
+  --anno: #e78a3a;
+  --anno-pop: #3c3f47;
   --danger: #e07a63;
   --a-grade: #5fc98a;
   --b-grade: #ddac4c;
@@ -686,12 +690,37 @@ a:hover { text-decoration: underline; }
 }
 .anno-hit:hover { background: var(--bg-sunken); }
 .dark .anno-hit:hover { background: var(--surface-2); }
-/* 批注本身紧跟在被标的那句后面：灰色、比正文小一号，不加底色也不加线 */
+/* 批注徽标：橙底白字的小圆点，紧跟在被标的那句后面，点一下浮出气泡 */
 .anno-chip {
-  display: inline; margin-left: .28em; padding: 0; border: 0; background: none;
-  color: var(--muted); font-size: .9em; line-height: 1.6; cursor: pointer;
+  display: inline-block; margin-left: .22em; padding: 0;
+  width: 1.3em; height: 1.3em; line-height: 1.3em;
+  border-radius: 50%; background: var(--anno); color: #fff;
+  font-size: .72em; font-weight: 700; text-align: center;
+  vertical-align: .06em; cursor: pointer;
+  user-select: none; -webkit-user-select: none;
 }
-.anno-chip:hover { color: var(--text-2); }
+.anno-chip:hover { filter: brightness(1.08); }
+/* 批注气泡：深底白字，底下一个尖角指着徽标 */
+.anno-pop {
+  position: fixed; z-index: 70; max-width: min(330px, calc(100vw - 28px));
+  padding: 12px 15px; border-radius: 14px;
+  background: var(--anno-pop); color: #f4f3f0;
+  font-size: calc(14.5px * var(--fsm)); line-height: 1.65; font-weight: 500;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .32);
+  animation: annoPopIn .15s ease-out;
+}
+.anno-pop::after {
+  content: ''; position: absolute; left: var(--arrow-x, 50%); bottom: -8px;
+  transform: translateX(-50%);
+  border-left: 8px solid transparent; border-right: 8px solid transparent;
+  border-top: 9px solid var(--anno-pop);
+}
+.anno-pop.below::after {
+  bottom: auto; top: -8px;
+  border-top: none; border-bottom: 9px solid var(--anno-pop);
+}
+@keyframes annoPopIn { from { opacity: 0; transform: translateY(5px); } }
 /* 选中中的那一条 */
 .hl.sel, .anno-hit.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* 定位到某一句时闪一下：点列表里的划线/批注，一眼看见落在哪 */
@@ -2112,7 +2141,9 @@ function applySpans(root) {
       const chip = document.createElement('span');
       chip.className = 'anno-chip';
       chip.dataset.anno = it.id;
-      chip.textContent = '（' + (it.b || '') + '）';
+      chip.dataset.annoB = it.b || '';       /* 气泡里显示的那句话 */
+      chip.textContent = '批';
+      chip.title = '点开看这条批注';
       sp.parentNode.insertBefore(chip, sp.nextSibling);
     }
   }
@@ -6922,6 +6953,9 @@ function bind() {
     // 点画线 / 批注：选中它，浮出工具条
     const mkh = t.closest('[data-mk]');
     if (mkh) { pickMark(mkh, 'mark'); return; }
+    /* 点批注徽标：先浮出那句话的气泡，别急着弹工具条 */
+    const achip = t.closest('.anno-chip');
+    if (achip) { annoPopToggle(achip); return; }
     const anh = t.closest('[data-anno]');
     if (anh) { pickMark(anh, 'anno'); return; }
 
@@ -7300,6 +7334,78 @@ function randomEntry() {
   jumpTo(e.id);
   toast(unread.length ? '随便读一条' : '全书都读过了，再来一遍');
 }
+
+/* ---------- 批注气泡：深色小框，底下一个尖角指着徽标 ---------- */
+let ANNO_POP = null;
+function annoPopEl() {
+  if (ANNO_POP) return ANNO_POP;
+  const p = document.createElement('div');
+  p.className = 'anno-pop';
+  p.hidden = true;
+  document.body.appendChild(p);
+  ANNO_POP = p;
+  return p;
+}
+function annoPopHide() {
+  if (!ANNO_POP) return;
+  ANNO_POP.hidden = true;
+  ANNO_POP.classList.remove('below');
+}
+/* 气泡摆哪儿：浮在徽标正上方，尖角指着徽标；上面不够就翻到下面 */
+function annoPopPlace(chip) {
+  const p = ANNO_POP;
+  if (!p || !chip) return;
+  const r = chip.getBoundingClientRect();
+  const w = p.offsetWidth, h = p.offsetHeight;
+  let left = r.left + r.width / 2 - w / 2;
+  left = Math.max(10, Math.min(left, window.innerWidth - w - 10));
+  let top = r.top - h - 13;                 /* 默认浮在上面 */
+  p.classList.remove('below');
+  if (top < 8) { top = r.bottom + 13; p.classList.add('below'); }
+  p.style.left = Math.round(left) + 'px';
+  p.style.top = Math.round(top) + 'px';
+  /* 尖角指着徽标：别顶到圆角外面去 */
+  p.style.setProperty('--arrow-x',
+    Math.round(Math.max(14, Math.min(r.left + r.width / 2 - left, w - 14))) + 'px');
+}
+function annoPopToggle(chip) {
+  const p = annoPopEl();
+  if (!p.hidden && p.dataset.forId === chip.dataset.anno) { annoPopHide(); return; }
+  const txt = chip.dataset.annoB || '';
+  if (!txt.trim()) { toast('这条批注是空的', 'err'); return; }
+  p.textContent = txt;
+  p.dataset.forId = chip.dataset.anno || '';
+  p.hidden = false;
+  annoPopPlace(chip);
+}
+/* 页面滚了：气泡跟着徽标走；徽标滚出屏幕了，才收起来 */
+function annoPopMove() {
+  if (!ANNO_POP || ANNO_POP.hidden) return;
+  const chip = $('#main .anno-chip[data-anno="' + (ANNO_POP.dataset.forId || '') + '"]');
+  if (!chip) { annoPopHide(); return; }
+  const r = chip.getBoundingClientRect();
+  if (r.bottom < 0 || r.top > window.innerHeight) { annoPopHide(); return; }
+  annoPopPlace(chip);
+}
+/* 点到别处，气泡就收起来 */
+document.addEventListener('click', (ev) => {
+  if (!ANNO_POP || ANNO_POP.hidden) return;
+  if (!ev.target.closest) return;
+  if (ev.target.closest('.anno-chip') || ev.target.closest('.anno-pop')) return;
+  annoPopHide();
+}, true);
+window.addEventListener('scroll', annoPopMove, true);
+window.addEventListener('resize', annoPopMove);
+/* 点气泡里的字：收起气泡，弹出那条批注的工具条 */
+document.addEventListener('click', (ev) => {
+  if (!ev.target.closest) return;
+  const pop = ev.target.closest('.anno-pop');
+  if (!pop || pop !== ANNO_POP) return;
+  const id = ANNO_POP.dataset.forId || '';
+  annoPopHide();
+  const chip = $('#main .anno-chip[data-anno="' + id + '"]');
+  if (chip) pickMark(chip, 'anno');
+});
 
 /* ---------- 点画线 / 批注：选中它，浮出工具条 ---------- */
 function hideMarkBar() {
