@@ -989,6 +989,14 @@ mark { background: color-mix(in srgb, var(--star) 32%, transparent); color: inhe
 .sheet-body p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.75; color: var(--text-2); }
 .sheet-body h4 { font-size: 13px; font-weight: 700; letter-spacing: .05em; color: var(--faint); margin: 18px 0 8px; text-transform: uppercase; }
 .sheet-body h4:first-child { margin-top: 0; }
+/* 改写面板：确认/取消放到头部。头部常驻，往下滚也点得到 */
+.sheet-head.with-actions {
+  flex-wrap: wrap; align-items: flex-start;
+  position: sticky; top: 0; z-index: 3; background: var(--surface);
+}
+.sheet-head.with-actions .sheet-title { flex: 1 1 0%; min-width: 0; line-height: 1.5; }
+.sheet-head.with-actions .icon-btn { flex: none; margin-top: -2px; }
+.sheet-head-acts { flex: 1 0 100%; display: flex; gap: 7px; justify-content: flex-end; margin-top: 4px; }
 
 .kbd-list { display: grid; grid-template-columns: auto 1fr; gap: 7px 14px; font-size: 13px; align-items: center; }
 kbd {
@@ -1323,6 +1331,11 @@ kbd {
 /* 次要按钮：不抢眼，划过去才显出边框 */
 .tts-b.tts-quiet { border-color: transparent; background: none; color: var(--muted); }
 .tts-b.tts-quiet:hover { border-color: var(--border); background: var(--surface-2); color: var(--accent-text); }
+/* 声音开关（📢）：按一下就静音。静了照样往下读，只是不出声 */
+.tts-b.tts-mute { font-size: 15px; line-height: 1; padding: 0 9px; }
+.tts-b.tts-mute.on { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+.tts-b.tts-mute.off { border-color: transparent; background: none; color: var(--faint); }
+.tts-b.tts-mute.off:hover { border-color: var(--border); background: var(--surface-2); color: var(--accent-text); }
 .tts-sep { flex: none; width: 1px; height: 15px; background: var(--border); margin: 0 2px; }
 .tts-bar-prog { height: 2px; border-radius: 2px; background: var(--border); margin-top: 8px; overflow: hidden; }
 .tts-bar-prog i { display: block; height: 100%; background: var(--accent); transition: width .25s; }
@@ -1361,6 +1374,7 @@ body.has-tts-bar .view { padding-bottom: 152px; }
 .tts-pill:hover { border-color: var(--accent); color: var(--accent-text); }
 .tts-pill[hidden] { display: none; }
 .tts-pill svg { width: 15px; height: 15px; flex: none; }
+.tts-pill .tp-ico { display: inline-flex; align-items: center; justify-content: center; flex: none; font-size: 14px; line-height: 1; }
 .tts-pill .tp-txt {
   max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--text-2); font-size: 11.5px; flex: none;
@@ -1593,7 +1607,7 @@ function md(s) {
 const SKEY = 'lifebook.v1';
 const blank = () => ({ v: 1, ent: {}, custom: [], marks: [], thinks: [], dwell: {}, ttsMs: {},
   ui: { theme: 'auto', size: 'm', mode: 'read', ch: 1, sort: 'chapter', pos: {},
-        tts: { voiceName: '', rate: 1, pitch: 1, follow: true, wake: true },
+        tts: { voiceName: '', rate: 1, pitch: 1, follow: true, wake: true, mute: false },
         unlock: { level: 'std', timeOn: true } } });
 
 let store;
@@ -2339,13 +2353,10 @@ function openEditParaSheet(eid) {
   const orig = e.f['说人话'] || '';
   const cur = view(e).f['说人话'] || orig;
   const sh = openSheet('改写这一段',
-    '<p style="font-size:12.5px;color:var(--muted)">直接改这段正文。原文留着，随时能还原。' +
-    '段里的划线和批注按文字重新对位；对不上的标成「原文已改」，不会悄悄丢。</p>' +
     '<textarea class="edit-area" data-fld="text" rows="12" style="min-height:260px">' + esc(cur) + '</textarea>' +
-    '<div class="edit-bar" style="margin-top:16px">' +
-      '<button class="btn btn-primary" data-save>存下</button>' +
-      (cur !== orig ? '<button class="btn" data-revert>还原成原文</button>' : '') +
-      '<button class="btn" data-sheet-close>取消</button></div>');
+    (cur !== orig ? '<div class="edit-bar" style="margin-top:16px"><button class="btn" data-revert>还原成原文</button></div>' : ''),
+    { actions: '<button class="btn btn-primary btn-sm" data-save>存下</button>' +
+               '<button class="btn btn-sm" data-sheet-close>取消</button>' });
   sh.el.addEventListener('click', (ev) => {
     if (ev.target.closest('[data-revert]')) {
       setEditedText(eid, orig, orig);
@@ -2388,12 +2399,9 @@ function openEditChapterSheet(chId) {
   const text = items.map((e) => e.f['说人话'] || '').join('\n\n');
   const ci = Number(String(ch.id).split(':')[1] || 0);
   const sh = openSheet('改写「' + ch.title + '」',
-    '<p style="font-size:12.5px;color:var(--muted)">把这一章整个换掉。空行分段，<b># 开头</b>的算新章标题。' +
-    '这一章里的划线和批注会按文字重新对位；对不上的标成「原文已改」，不会悄悄丢。</p>' +
-    '<textarea class="edit-area" data-fld="text" rows="14" style="min-height:320px">' + esc(text) + '</textarea>' +
-    '<div class="edit-bar" style="margin-top:16px">' +
-      '<button class="btn btn-primary" data-save>换掉这一章</button>' +
-      '<button class="btn" data-sheet-close>取消</button></div>');
+    '<textarea class="edit-area" data-fld="text" rows="14" style="min-height:320px">' + esc(text) + '</textarea>',
+    { actions: '<button class="btn btn-primary btn-sm" data-save>换掉这一章</button>' +
+               '<button class="btn btn-sm" data-sheet-close>取消</button>' });
   sh.el.addEventListener('click', (ev) => {
     if (!ev.target.closest('[data-save]')) return;
     const val = sh.el.querySelector('[data-fld="text"]').value;
@@ -4650,8 +4658,9 @@ function openSheet(title, bodyHTML, opts) {
   sh.className = 'sheet';
   sh.setAttribute('role', 'dialog');
   sh.setAttribute('aria-modal', 'true');
-  sh.innerHTML = '<div class="sheet-head"><div class="sheet-title">' + title + '</div>' +
-    '<button class="icon-btn" data-sheet-close aria-label="关闭"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>' +
+  sh.innerHTML = '<div class="sheet-head' + (opts.actions ? ' with-actions' : '') + '"><div class="sheet-title">' + title + '</div>' +
+    '<button class="icon-btn" data-sheet-close aria-label="关闭"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>' +
+    (opts.actions ? '<div class="sheet-head-acts">' + opts.actions + '</div>' : '') + '</div>' +
     '<div class="sheet-body">' + bodyHTML + '</div>';
   layer.appendChild(bd); layer.appendChild(sh);
   const close = () => { bd.remove(); sh.remove(); document.removeEventListener('keydown', onKey); if (opts.onClose) opts.onClose(); };
@@ -4704,13 +4713,12 @@ function openEditSheet(id) {
   const cur = store.ent[id] && store.ent[id].e;
   const f = cur ? Object.assign({}, e.f, cur.f) : Object.assign({}, e.f);
   const body =
-    '<p style="font-size:12.5px;color:var(--muted)">改写只存在你自己的浏览器里，原书正文不会被改动。随时可以「还原」。</p>' +
     '<h4>标题</h4><textarea class="edit-area" data-fld="title" rows="2">' + esc(cur && cur.title ? cur.title : e.title) + '</textarea>' +
     FIELDS.map((k) => '<h4>' + k + '</h4><textarea class="edit-area" data-fld="' + k + '" rows="' + (k === '来源' ? 4 : 3) + '">' + esc(f[k] || '') + '</textarea>').join('') +
-    (cur ? '<div class="edit-bar"><button class="btn btn-sm" data-revert>还原成原文</button></div>' : '') +
-    '<div class="edit-bar" style="margin-top:16px"><button class="btn btn-primary" data-save>保存改写</button>' +
-    '<button class="btn" data-sheet-close>取消</button></div>';
-  const sh = openSheet('改写第 ' + e.n + ' 条', body);
+    (cur ? '<div class="edit-bar" style="margin-top:16px"><button class="btn btn-sm" data-revert>还原成原文</button></div>' : '');
+  const sh = openSheet('改写第 ' + e.n + ' 条', body,
+    { actions: '<button class="btn btn-primary btn-sm" data-save>保存改写</button>' +
+               '<button class="btn btn-sm" data-sheet-close>取消</button>' });
   sh.el.addEventListener('click', (ev) => {
     if (ev.target.closest('[data-save]')) {
       const get = (k) => { const t = sh.el.querySelector('[data-fld="' + k + '"]'); return t ? t.value.trim() : ''; };
@@ -5655,8 +5663,12 @@ function openUnlockSheet(b, ch) {
    念过的时间算「有效阅读时长」，念完的段落算「已读」——
    所以不想用眼睛读的时候，让它念给你听，考核照样算。 */
 const TTS = { on: false, playing: false, idx: 0, list: [], cur: null, curId: null, tick: null, tickLast: 0, keep: null, watch: null, waiting: null, realMs: 0, open: false,
-  plan: { on: false, mode: 'forever', endCh: 0, until: 0 }, planTimer: null };
+  plan: { on: false, mode: 'forever', endCh: 0, until: 0 }, planTimer: null,
+  mute: false,                              /* 声音开关：关了也不出声，句子照着往下走 */
+  silent: { timer: null, deadline: 0, remain: 0 } };
 let ttsGen = 0;
+/* 静音是记在设置里的：下次开念还是静音（随时可以用 📢 叫回来） */
+TTS.mute = !!(store.ui.tts && store.ui.tts.mute);
 function ttsSupported() { return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window; }
 let TTS_VOICES = [];
 function ttsLoadVoices() {
@@ -5791,7 +5803,7 @@ function ttsEnsurePill() {
   pill.className = 'tts-pill';
   pill.hidden = true;
   pill.title = '展开朗读条';
-  pill.innerHTML = ICON.speaker + '<span class="tp-txt">读进去</span><span class="tp-num">0%</span>' +
+  pill.innerHTML = '<span class="tp-ico">' + ICON.speaker + '</span><span class="tp-txt">读进去</span><span class="tp-num">0%</span>' +
     '<i class="tp-bar" style="width:0%"></i>';
   pill.addEventListener('click', () => { TTS.open = true; ttsBarUpdate(); });
   document.body.appendChild(pill);
@@ -5841,6 +5853,7 @@ function ttsEnsureBar() {
       '<button class="tts-b" data-tts="chprev" title="上一章">' + TTS_ICON.chprev + '</button>' +
       '<button class="tts-b" data-tts="prev" title="上一句">' + TTS_ICON.prev + '</button>' +
       '<button class="tts-b tts-play" data-tts="play" title="播放 / 暂停">' + TTS_ICON.play + '</button>' +
+      '<button class="tts-b tts-mute" data-tts="mute" title="声音开关">📢</button>' +
       '<button class="tts-b" data-tts="next" title="下一句">' + TTS_ICON.next + '</button>' +
       '<button class="tts-b" data-tts="chnext" title="下一章">' + TTS_ICON.chnext + '</button>' +
       '<span class="tts-sep"></span>' +
@@ -5876,6 +5889,7 @@ function ttsEnsureBar() {
       /* 浏览到别处了，一键跳回正在念的那章 */
       if (TTS.chId) { ttsGotoChapter(TTS.chId); toast('已回到正在念的章节'); }
     }
+    else if (k === 'mute') ttsToggleMute();
     else if (k === 'rate') ttsCycleRate();
     else if (k === 'voice') ttsOpenSettings();
     else if (k === 'script') ttsOpenScript();
@@ -5918,7 +5932,8 @@ function ttsIndexAtScreen() {
 /* 开始念这一章 */
 /* text 有值 = 只念这一段；没有 = 念整章 */
 function ttsStart(ids, text) {
-  if (!ttsSupported()) { toast('这个浏览器没有语音朗读功能', 'err'); return; }
+  /* 静音读不靠系统语音：没装语音包的设备照样能自动读（只是不出声） */
+  if (!ttsSupported() && !TTS.mute) { toast('这个浏览器没有语音朗读功能', 'err'); return; }
   const b = curBook();
   if (!b || b.builtin) { toast('内置那本不用朗读', 'err'); return; }
   ttsEnsureBar();
@@ -5944,8 +5959,8 @@ function ttsStart(ids, text) {
   // 从哪儿开始念：上次念到哪儿就接着哪儿——朗读有自己的进度线，
   // 中间翻到哪儿、跳去看哪条划线，都不打扰它。没念过的章才看屏幕停在哪儿。
   TTS.idx = text ? TTS.idx : ttsStartIndex();
-  // 有些系统语音是异步加载的：先等等，别急着开口
-  if (!ttsLoadVoices().length) {
+  // 有些系统语音是异步加载的：先等等，别急着开口（静音模式不用等）
+  if (!TTS.mute && !ttsLoadVoices().length) {
     toast('正在等系统语音…');
     if (TTS.waiting) clearInterval(TTS.waiting);
     let tries = 0;
@@ -6000,6 +6015,17 @@ function ttsPlay() {
 function ttsPause() {
   if (!TTS.on || !TTS.playing) return;
   TTS.playing = false;
+  if (TTS.mute) {
+    /* 静音读：把这一句还剩多少时间存下来，恢复时接着走 */
+    clearTimeout(TTS.silent.timer); TTS.silent.timer = null;
+    if (TTS.silent.deadline) {
+      TTS.silent.remain = Math.max(0, TTS.silent.deadline - Date.now());
+      TTS.silent.deadline = 0;
+    }
+    ttsTickStop();
+    ttsUI();
+    return;
+  }
   // 这里不能把 ttsGen 作废：那句话还挂在引擎上，
   // 作废了就收不到它的 onend，念完这一句也就不会往下走了。
   try { window.speechSynthesis.pause(); } catch (e) {}
@@ -6027,6 +6053,8 @@ function ttsStop(keepPlan) {
   TTS.cur = null; TTS.curId = null;
   ttsGen++;
   clearTimeout(TTS.watch); TTS.watch = null;
+  clearTimeout(TTS.silent.timer); TTS.silent.timer = null;
+  TTS.silent.remain = 0; TTS.silent.deadline = 0;
   try { window.speechSynthesis.cancel(); } catch (e) {}
   ttsTickStop();
   if (TTS.keep) { clearInterval(TTS.keep); TTS.keep = null; }
@@ -6055,6 +6083,9 @@ function ttsRebuild() {
 function ttsCancel() {
   ttsGen++;
   try { window.speechSynthesis.cancel(); } catch (e) {}
+  /* 静音读的定时器也收掉：重来就从头算 */
+  clearTimeout(TTS.silent.timer); TTS.silent.timer = null;
+  TTS.silent.remain = 0; TTS.silent.deadline = 0;
   ttsTickStop();
 }
 function ttsSpeak() {
@@ -6062,6 +6093,12 @@ function ttsSpeak() {
   if (TTS.idx >= TTS.list.length) { ttsFinish(); return; }
   const s = TTS.list[TTS.idx];
   if (!s) { ttsFinish(); return; }
+  /* 静音：不出声，但句子照着往下走（自动阅读） */
+  if (TTS.mute) { ttsSpeakSilent(s); return; }
+  ttsSpeakVoice(s);
+}
+/* 出声读一句 */
+function ttsSpeakVoice(s) {
   // 先把引擎里挂着的那句清掉：它要是还暂停着，新的话会排在它后面，永远轮不到
   try { window.speechSynthesis.cancel(); } catch (e) {}
   const gen = ++ttsGen;
@@ -6113,10 +6150,71 @@ function ttsSpeak() {
     toast('这台设备读不出声音（可能没装中文语音包）', 'err');
   }, 6000);
 }
+/* ---------- 静音读（自动阅读）----------
+   声音关了，阅读不停：句子照着往下走，高亮和滚动照旧，
+   眼睛跟着文字走——就是一个不出声的自动阅读。
+   一句按字数估个停留时间（语速一起算），到点就换下一句。 */
+function ttsSilentMs(s) {
+  const rate = Math.max(0.4, Number(store.ui.tts.rate) || 1);
+  const n = (s && s.text) ? s.text.length : 12;
+  return clamp(Math.round(n / (3.8 * rate) * 1000), 1500, 24000);
+}
+function ttsSpeakSilent(s) {
+  if (!TTS.playing || !TTS.on) return;
+  TTS.cur = s; TTS.curId = s.id;
+  ttsHighlight(s);           // 高亮 + 跟着滚：自动阅读的两件事
+  ttsTickStart(s.id);        // 静音也按读过的时长记账
+  const dur = TTS.silent.remain > 0 ? TTS.silent.remain : ttsSilentMs(s);
+  TTS.silent.remain = 0;
+  TTS.silent.deadline = Date.now() + dur;
+  clearTimeout(TTS.silent.timer);
+  TTS.silent.timer = setTimeout(() => {
+    TTS.silent.timer = null;
+    ttsTickStop();
+    TTS.cur = null;
+    if (s.last) ttsMarkRead(s.id);      // 整段读完了，这段才算读过
+    TTS.idx++;
+    TTS.cur = TTS.list[TTS.idx] || null;
+    ttsUI();
+    if (TTS.playing) {
+      // 读完一句就把播放条收起来，正文是主角（和有声时一样）
+      TTS.open = false;
+      ttsBarUpdate();
+      ttsSpeak();
+    }
+  }, dur);
+}
+/* 声音开关：📢 按一下就静音，静了照样往下读；
+   再按一下把声音叫回来，从当下这句接着念。 */
+function ttsSetMute(on) {
+  const next = !!on;
+  if (next === TTS.mute) return;
+  TTS.mute = next;
+  store.ui.tts.mute = next;
+  save();
+  if (TTS.on && TTS.playing) {
+    const s = TTS.list[TTS.idx];
+    const elapsed = TTS.tickLast ? Date.now() - TTS.tickLast : 0;
+    ttsCancel();                       // 先把当前这句收干净
+    if (next) {
+      // 从有声切成静音：刚才念过的那部分折掉，剩下的一半接着走
+      TTS.silent.remain = Math.max(600, ttsSilentMs(s) - elapsed);
+    } else {
+      TTS.silent.remain = 0;
+    }
+    ttsSpeak();
+  }
+  ttsUI();
+  toast(next ? '声音关了：文字自己往下走，不出声' : '声音开了，接着念');
+}
+function ttsToggleMute() { ttsSetMute(!TTS.mute); }
+
 function ttsFinish() {
   TTS.playing = false;
   TTS.cur = null;
   ttsTickStop();
+  clearTimeout(TTS.silent.timer); TTS.silent.timer = null;
+  TTS.silent.remain = 0; TTS.silent.deadline = 0;
   ttsClearHighlight();
   ttsUI();
   if (TTS.plan && TTS.plan.on) {
@@ -6282,8 +6380,9 @@ function ttsUI() {
   const prog = document.getElementById('tts-bar-prog');
   const play = bar.querySelector('[data-tts="play"]');
   const rate = bar.querySelector('[data-tts="rate"]');
+  const mute = bar.querySelector('[data-tts="mute"]');
   if (state) {
-    state.textContent = !TTS.on ? '' : (TTS.playing ? '正在念' : '已暂停');
+    state.textContent = !TTS.on ? '' : (TTS.playing ? (TTS.mute ? '静音读' : '正在念') : '已暂停');
     state.classList.toggle('off', !TTS.on);
   }
   if (title) {
@@ -6302,6 +6401,15 @@ function ttsUI() {
   if (prog) prog.style.width = (TTS.list.length ? Math.round(TTS.idx / TTS.list.length * 100) : 0) + '%';
   if (play) play.innerHTML = TTS.playing ? TTS_ICON.pause : TTS_ICON.play;
   if (rate) rate.textContent = (Number(store.ui.tts.rate) || 1).toFixed(1) + '×';
+  if (mute) {
+    mute.textContent = TTS.mute ? '🔇' : '📢';
+    mute.classList.toggle('off', TTS.mute);
+    mute.classList.toggle('on', !TTS.mute);
+    mute.setAttribute('aria-pressed', TTS.mute ? 'true' : 'false');
+    mute.title = TTS.mute
+      ? '声音关了：文字照着往下走，不出声（点一下把声音叫回来）'
+      : '声音开着（点一下静音，文字照样往下走）';
+  }
   bar.classList.toggle('idle', !TTS.on);
 
   /* 播放条上的章节行：上一章 / 正在念的第几章 / 下一章。
@@ -6343,7 +6451,11 @@ function ttsUI() {
         ? TTS.cur.text.slice(0, 16) + '…'
         : (TTS.playing ? '正在念…' : '读进去');
     }
-    pill.title = TTS.playing ? '正在朗读，点开控制' : '读进去 ' + pct + '%，点开朗读条';
+    const ico = pill.querySelector('.tp-ico');
+    if (ico) ico.innerHTML = TTS.mute ? '🔇' : ICON.speaker;
+    pill.title = TTS.playing
+      ? (TTS.mute ? '静音读着，点开控制' : '正在朗读，点开控制')
+      : '读进去 ' + pct + '%，点开朗读条';
   }
   TTS.list.forEach((s, i) => { if (s.el) s.el.classList.toggle('tts-done', i < TTS.idx); });
 }
@@ -6424,6 +6536,12 @@ function wakeHint() {
 function ttsRevive() {
   if (!TTS.on || !TTS.playing) return;
   if (document.visibilityState !== 'visible') return;
+  /* 静音读不靠语音引擎：定时器被页面挂起冻住时，从这一句接着走 */
+  if (TTS.mute) {
+    if (!TTS.silent.timer) { TTS.silent.remain = 0; ttsSpeak(); }
+    ttsUI();
+    return;
+  }
   let speaking = false, paused = false;
   try {
     const ss = window.speechSynthesis;
@@ -6534,6 +6652,7 @@ function ttsOpenSettings() {
       '<span class="tts-val" id="tts-rate-val">' + rate.toFixed(1) + '×</span></div>' +
     '<div class="tts-row"><label>音调</label><input type="range" min="0.6" max="1.4" step="0.05" value="' + pitch + '" data-pitch>' +
       '<span class="tts-val" id="tts-pitch-val">' + pitch.toFixed(2) + '</span></div>' +
+    '<label class="tts-switch"><input type="checkbox" data-mute' + (TTS.mute ? ' checked' : '') + '> 静音读：不出声，文字照着往下走（自动阅读）</label>' +
     '<label class="tts-switch"><input type="checkbox" data-follow' + (follow ? ' checked' : '') + '> 朗读时自动滚到正在念的那句</label>' +
     '<label class="tts-switch"><input type="checkbox" data-wake' + (store.ui.tts.wake !== false ? ' checked' : '') + '> 朗读时屏幕别锁（费电，但不会念一半停住）</label>' +
     (wakeLockAvailable() ? '' : '<p class="tts-hint">这个环境没有「屏幕常亮」这个接口（多半是直接打开的文件，或浏览器不支持）。' +
@@ -6569,6 +6688,7 @@ function ttsOpenSettings() {
     }
   });
   sh.el.addEventListener('change', (ev) => {
+    if (ev.target.matches('[data-mute]')) { ttsSetMute(ev.target.checked); return; }
     if (ev.target.matches('[data-follow]')) { store.ui.tts.follow = ev.target.checked; save(); return; }
     if (ev.target.matches('[data-wake]')) {
       store.ui.tts.wake = ev.target.checked;
