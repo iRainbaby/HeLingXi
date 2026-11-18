@@ -136,10 +136,13 @@ html {
    换章时内容本来就变了，反馈已经足够，就不动画了。
    按压反馈（下面那组 transition）留着——那才是触感的关键，且便宜。 */
 
-/* 卡片按压时给点回弹，点得准（只做按压，不做入场：42 张一起入场会掉帧） */
-.card { transition: border-color .18s, box-shadow .18s, transform .14s cubic-bezier(.2,.9,.3,1); }
+/* 卡片按压时给点回弹，点得准（只做按压，不做入场：42 张一起入场会掉帧）
+   注意：这里别再用 scale 做按压反馈。长按选字时卡片会缩 0.5%，
+   段落里的字跟着左右挪将近 1px，整卡文字还得重新栅格化一遍——
+   看起来就是「点一下字，文字抖一下」。改成只动边框和阴影，位置纹丝不动。 */
+.card { transition: border-color .18s, box-shadow .18s; }
 .card:hover { border-color: var(--border-strong); }
-.card:active { transform: scale(.995); }
+.card:active { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
 
 html { -webkit-text-size-adjust: 100%; }
 
@@ -178,6 +181,12 @@ a:hover { text-decoration: underline; }
 .credit-link { flex: none; color: var(--accent-text); font-weight: 550; }
 .credit-link:hover { text-decoration: underline; }
 .credit-link + .credit-link { padding-left: 10px; border-left: 1px solid var(--border); margin-left: -2px; }
+/* 顶栏右上角那一块：能点，能改，但别把章节标题挤没了 */
+.credit-name {
+  padding: 0 2px; border-radius: 5px;
+  max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.credit-name:hover { text-decoration: underline; }
 
 /* ---------- 布局 ---------- */
 .shell { display: flex; align-items: flex-start; }
@@ -413,7 +422,13 @@ a:hover { text-decoration: underline; }
 .side-title-btn .s-arrow { font-size: 13px; color: var(--faint); line-height: 1; }
 
 /* ---------- 主区 ---------- */
-.main { flex: 1; min-width: 0; }
+.main { flex: 1; min-width: 0; position: relative; }
+/* 正文水印：淡淡的字铺在正文上，截图也带得上 */
+#wm {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  display: none; background-repeat: repeat; background-position: 0 0;
+}
+#wm.on { display: block; }
 .view { max-width: calc(var(--measure) + 120px); margin: 0 auto; padding: 0 24px 96px; }
 
 /* ---------- 章节头 ---------- */
@@ -590,6 +605,52 @@ a:hover { text-decoration: underline; }
 .edit-area:focus { outline: none; border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-soft); }
 .edit-bar { display: flex; gap: 7px; margin-top: 8px; }
 
+/* 改写工具条：字号 / 加粗 / 颜色 / 对齐 / 行距 / 段距 / 撤销
+   吸在弹层标题下面：往下滚也看得见，不用再往上翻半天 */
+.rbar {
+  display: flex; gap: 8px; align-items: center;
+  padding: 0; margin: 0;
+  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.rbar::-webkit-scrollbar { display: none; }
+.rgrp { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+.rgrp + .rgrp { padding-left: 10px; border-left: 1px solid var(--border); }
+.rgrp-t { font-size: 11.5px; color: var(--faint); margin-right: 2px; white-space: nowrap; }
+.rbar button {
+  min-width: 26px; height: 24px; padding: 0 7px; border-radius: 6px;
+  border: 1px solid transparent; background: none; color: var(--text-2);
+  font-size: 12.5px; line-height: 1; cursor: pointer;
+}
+.rbar button:hover { background: var(--bg-sunken); color: var(--text); }
+.rbar button.on { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+.rbar button.b { font-weight: 800; }
+.rbar .swatch { width: 20px; height: 20px; min-width: 20px; padding: 0; border-radius: 50%; border: 1px solid var(--border-strong); }
+.rbar input[type=color] { width: 26px; height: 24px; padding: 0; border: 1px solid var(--border-strong); border-radius: 6px; background: none; cursor: pointer; }
+/* 所见即所得的改写框：正文里直接就是排好版的样子。
+   字号、行距、缩进一律照抄正文那套（.card.plain-card .card-plain.book）：
+   编的时候是什么样，读出来就得是什么样。 */
+.rich-edit {
+  min-height: 300px; max-height: 46vh; overflow-y: auto;
+  padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface-2);
+  font-family: var(--serif); font-size: calc(16px * var(--fsm)); line-height: 2; color: var(--text);
+  overflow-wrap: anywhere;
+  outline: none; -webkit-user-select: text; user-select: text;
+}
+.rich-edit:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* 原文里的缩进和空行要留着（正文就是 pre-wrap） */
+.rich-edit > div { min-height: 1.4em; white-space: pre-wrap; }
+.rich-edit > div + div { margin-top: 15px; }
+/* 弹层底部那条工具条：选字时系统的浮层弹在选区旁边，
+   工具条待在底部，两边不打架 */
+.sheet.with-bar { display: flex; flex-direction: column; overflow: hidden; }
+.sheet.with-bar .sheet-head { flex: none; }
+.sheet.with-bar .sheet-body { flex: 1; min-height: 0; overflow-y: auto; }
+.sheet-bar {
+  flex: none; padding: 7px 10px; border-top: 1px solid var(--border); background: var(--surface);
+}
+
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
   height: 30px; padding: 0 12px; border-radius: 7px; font-size: 13px; font-weight: 550;
@@ -649,14 +710,17 @@ a:hover { text-decoration: underline; }
 }
 .result-chapter .ln { flex: 1; height: 1px; background: var(--border); }
 
+/* 划线和高亮都只是「盖在字上」的一层：
+   不加内边距、不改字重——一改，字的宽度就变了，行也会跟着重排，
+   划完线的那一段文字会突然挪位置。 */
 .hl {
-  color: inherit; border-radius: 2px; padding: 0 1px;
+  color: inherit; border-radius: 2px; padding: 0;
   box-decoration-break: clone; -webkit-box-decoration-break: clone;
   cursor: pointer;
 }
 /* 划线：文字下方一根线，不涂底色 */
 .hl.line {
-  background: none; font-weight: 500;
+  background: none;
   text-decoration: underline;
   text-decoration-color: var(--hl, #d9ad3b);
   text-decoration-thickness: 2px;
@@ -665,12 +729,10 @@ a:hover { text-decoration: underline; }
 /* 高亮：一个字也可能划，用底色垫起来 */
 .hl.high {
   background: var(--hl, #ffd85e);
-  font-weight: 600;
 }
 /* 下划线 + 高亮：底色垫着，字底下再压一道线 */
 .hl.both {
   background: var(--hl, #ffd85e);
-  font-weight: 600;
   text-decoration: underline;
   text-decoration-color: rgba(58,52,44,0.55);
   text-decoration-thickness: 2px;
@@ -678,7 +740,7 @@ a:hover { text-decoration: underline; }
 }
 /* 兜底：老数据 / 回放里没写类型的，按高亮显示，一眼认得出来 */
 .hl:not(.high):not(.line):not(.both) {
-  background: var(--hl, #ffd85e); font-weight: 600;
+  background: var(--hl, #ffd85e);
 }
 
 /* 批注：被标的那句只是拿来定位的，别再划线高亮——
@@ -704,7 +766,10 @@ a:hover { text-decoration: underline; }
 .anno-pop {
   position: fixed; z-index: 70; max-width: min(330px, calc(100vw - 28px));
   padding: 12px 15px; border-radius: 14px;
-  background: var(--anno-pop); color: #f4f3f0;
+  background-color: var(--anno-pop);
+  background-image: var(--wm-pop, none);      /* 气泡上也铺一层水印：截图一样带得上 */
+  background-size: 190px 120px;
+  color: #f4f3f0;
   font-size: calc(14.5px * var(--fsm)); line-height: 1.65; font-weight: 500;
   white-space: pre-wrap; overflow-wrap: anywhere;
   box-shadow: 0 12px 30px rgba(0, 0, 0, .32);
@@ -720,6 +785,7 @@ a:hover { text-decoration: underline; }
   bottom: auto; top: -8px;
   border-top: none; border-bottom: 9px solid var(--anno-pop);
 }
+.anno-pop-t { display: block; }
 @keyframes annoPopIn { from { opacity: 0; transform: translateY(5px); } }
 /* 选中中的那一条 */
 .hl.sel, .anno-hit.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -731,8 +797,22 @@ a:hover { text-decoration: underline; }
 }
 mark.jump { background: color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 2px; padding: 0 1px; }
 .markbar::after { display: none; }
+/* 工具条右上角的关闭钮：动作固定两列，右边空出一格放它 */
+.markbar { padding: 8px 30px 8px 10px; }
+.markbar .mb-acts {
+  display: grid; grid-template-columns: repeat(2, auto);
+  gap: 2px 10px; justify-content: center;
+}
+.selbar .mb-close {
+  position: absolute; top: 4px; right: 4px;
+  width: 22px; height: 22px; min-width: 0; border-radius: 50%;
+  display: grid; place-items: center; gap: 0; flex-direction: row;
+  color: rgba(242, 240, 236, .55); font-size: 12px; line-height: 1;
+  background: none; border: none; cursor: pointer; padding: 0;
+}
+.selbar .mb-close:hover { background: rgba(255, 255, 255, .14); color: #f2f0ec; }
 .hl:active { filter: brightness(.9); }
-mark { background: color-mix(in srgb, var(--star) 32%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+mark { background: color-mix(in srgb, var(--star) 32%, transparent); color: inherit; border-radius: 2px; padding: 0; }
 
 .empty { text-align: center; padding: 70px 20px; color: var(--muted); }
 .empty-icon { font-size: 34px; margin-bottom: 12px; opacity: .5; }
@@ -1018,6 +1098,15 @@ mark { background: color-mix(in srgb, var(--star) 32%, transparent); color: inhe
 .sheet-body p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.75; color: var(--text-2); }
 .sheet-body h4 { font-size: 13px; font-weight: 700; letter-spacing: .05em; color: var(--faint); margin: 18px 0 8px; text-transform: uppercase; }
 .sheet-body h4:first-child { margin-top: 0; }
+/* 设置面板：分组标题带一条细线，组与组之间一眼分得开 */
+.sheet-body h4 { display: flex; align-items: center; gap: 10px; letter-spacing: .04em; }
+.sheet-body h4::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.sheet-body .menu-list { margin-bottom: 2px; }
+/* 设置面板：一行一件事，说明文字不要了 */
+.sheet-body .menu-item > span:not(.mi-ico):not(.sw) { min-width: 0; flex: 1; }
+.sheet-body .mi-l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-body .menu-item.disabled { opacity: .5; }
+.sheet-body .menu-item.disabled:active { transform: none; }
 /* 改写面板：确认/取消放到头部。头部常驻，往下滚也点得到 */
 .sheet-head.with-actions {
   flex-wrap: wrap; align-items: flex-start;
@@ -1391,8 +1480,8 @@ body.has-tts-bar .view { padding-bottom: 152px; }
 .tts-pill {
   position: fixed; z-index: 45; right: 12px;
   bottom: calc(70px + env(safe-area-inset-bottom));
-  display: inline-flex; align-items: center; gap: 6px; overflow: hidden;
-  height: 38px; padding: 0 12px 0 10px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; overflow: hidden;
+  height: 38px; width: 38px; padding: 0;
   border: 1px solid var(--border-strong); border-radius: 999px;
   background: color-mix(in srgb, var(--surface) 74%, transparent);
   color: var(--text-2);
@@ -1501,9 +1590,12 @@ body.has-tts-bar .view { padding-bottom: 152px; }
     <h1>这个阅读器没能启动起来</h1>
     <p id="bf-reason">下面的信息能帮你判断是文件没下全，还是浏览器拦了什么。</p>
     <pre id="bf-detail"></pre>
+    <div class="edit-bar" style="margin:0 0 18px">
+      <button class="btn btn-primary" id="bf-retry">重试</button>
+    </div>
     <h2>可以先试这几步</h2>
     <ol>
-      <li>确认文件大小约 <b>1.85 MB</b>。如果只有几十 KB，就是没下全，重新下载一次。</li>
+      <li>确认文件大小约 <b>2.2 MB</b>。如果只有几十 KB，就是没下全，重新下载一次。</li>
       <li>把文件后缀确认是 <code>.html</code>。有些系统会存成 <code>.html.txt</code>，改回来再打开。</li>
       <li><b>手机上打不开是正常的</b>：iPhone / iPad 的系统不允许直接运行本地 HTML 文件，安卓和电脑则可以。</li>
       <li>手机上看，请用一个网址打开，别下载到本地。</li>
@@ -1523,6 +1615,8 @@ body.has-tts-bar .view { padding-bottom: 152px; }
     box.hidden = false;
   }
   window.__bfFail = fail;
+  var retry = document.getElementById('bf-retry');
+  if (retry) retry.addEventListener('click', function () { location.reload(); });
   window.addEventListener('error', function (e) {
     if (e && e.target && e.target !== window) return;      // 资源加载失败不算启动失败
     window.__bfDetail = (e.message || '') + ' @ ' + (e.filename || '').split('/').pop() + ':' + (e.lineno || '');
@@ -1540,9 +1634,18 @@ body.has-tts-bar .view { padding-bottom: 152px; }
   // 判据是「应用启动完没有」，不是「DOM 里有没有卡片」。
   // 早先按 DOM 判，解析大 PDF 阻塞主线程超过 4 秒就会误判成启动失败，
   // 那个全屏面板会把整个应用盖住——慢手机必中。
+  //
+  // 后来发现「有时打不开」多半也是它：手机上从文件打开，IndexedDB 要等、
+  // 几万字要画，慢一点就超过 8 秒，正文其实好好的，失败页却盖了上来。
+  // 所以：放宽到 20 秒；正文已经画出来了就放过；再加一个「重试」。
   setTimeout(function () {
-    if (!window.__booted) fail('正文没能显示出来。');
-  }, 8000);
+    if (window.__booted) return;
+    try {
+      // 正文其实已经出来了（只是收尾还没做完）：别盖
+      if (document.querySelector('#main .view, #main .card, #main .ch-head')) return;
+    } catch (e) {}
+    fail('正文还没显示出来——多半是这台机器慢。点下面的「重试」再开一次，或者等它多转一会儿。');
+  }, 20000);
 })();
 </script>
 
@@ -1559,6 +1662,10 @@ body.has-tts-bar .view { padding-bottom: 152px; }
   <button class="tab" data-go="mine">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-1.6a4.4 4.4 0 00-4.4-4.4H8.4A4.4 4.4 0 004 19.4V21"/><circle cx="12" cy="7.4" r="4"/></svg>
     <span>我的</span>
+  </button>
+  <button class="tab" data-go="settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1.03 1.56V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008.6 19.3a1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.7 1.7 0 004.7 15a1.7 1.7 0 00-1.56-1.03H3a2 2 0 110-4h.1A1.7 1.7 0 004.7 8.6a1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06A1.7 1.7 0 0019.3 4.7a1.7 1.7 0 001.03-1.56V3a2 2 0 114 0v.1a1.7 1.7 0 001.03 1.56 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V9a1.7 1.7 0 001.56 1.03H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.56 1.03z"/></svg>
+    <span>设置</span>
   </button>
   <button class="tab" data-go="random">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
@@ -1613,10 +1720,135 @@ function toast(msg, kind) {
 }
 
 /* 行内 markdown：粗体、链接、裸 URL */
+/* ---------- 改写里的排版标记 ----------
+   正文是纯文本，要加格式就用一对大括号：
+     {size=1.3}字{/size}        字号（em）
+     {color=#c0392b}字{/color}  颜色
+     {b}字{/b}                  加粗（也可以用 **字**）
+     {align=center}             写在段首：左 / 右 / 中 / 两端
+     {line=1.8}                写在段首：行距
+     {gap=1.2}                 写在段首：段前段后的间距（em） */
+const RICH_NUM = (v, lo, hi) => {
+  const n = parseFloat(v);
+  return (isFinite(n) && n >= lo && n <= hi) ? Math.round(n * 100) / 100 : 0;
+};
+const RICH_COLOR = (v) => {
+  const s = String(v || '').trim();
+  if (/^#[0-9a-f]{3}$/i.test(s) || /^#[0-9a-f]{6}$/i.test(s)) return s;
+  if (/^(red|blue|green|orange|purple|gray|grey|black|white)$/i.test(s)) return s.toLowerCase();
+  return '';
+};
+/* 正文里的排版标记去掉，只留字：
+   分享图里要印的是「读者看到的样子」，不是存储层那串花括号。 */
+function richPlain(text) {
+  let t = String(text || '');
+  t = t.replace(/\{\/?(?:size|color|b)(?:=[^}]*)?\}/g, '');   // 行内标记
+  t = t.replace(/^\{(?:align|line|gap)(?:=[^}]*)?\}/gm, '');        // 段首标记
+  t = t.replace(/\*\*/g, '');                                     // 加粗标记
+  return t;
+}
+
+/* 排版标记 → Markdown：颜色/字号翻成内联 HTML，对齐翻成 div，粗体保持 **。
+   导出成 .md 时用它：样式留得住，又不会把 {size=1.3} 这种内部标记露出去。 */
+function richToMarkdown(text) {
+  const paras = String(text || '').split(/\n{2,}/);
+  return paras.map((p) => {
+    const st = richPara(p);
+    const body = richParse(st.text);
+    const al = (st.style.match(/text-align:(\w+)/) || [])[1];
+    if (al) return '<div align="' + al + '">\n' + body + '\n</div>';
+    return body;
+  }).join('\n\n');
+}
+
+/* 行内标记 → HTML。容错：套错了的也尽量还原，别在正文里留一堆花括号。
+   {size=1.3}字{/size}、{color=#b0442f}字{/color}、**字**。
+   认出这三种标记，其余的花括号当普通字留着。 */
+function richOpen(o) {
+  if (o.tag === 'size') { const n = RICH_NUM(o.val, .6, 4); return n ? '<span style="font-size:' + n + 'em">' : ''; }
+  if (o.tag === 'color') { const c = RICH_COLOR(o.val); return c ? '<span style="color:' + c + '">' : ''; }
+  if (o.tag === 'b') return '<strong>';
+  return '';
+}
+function richClose(o) {
+  if (o.tag === 'size') { const n = RICH_NUM(o.val, .6, 4); return n ? '</span>' : ''; }
+  if (o.tag === 'color') { const c = RICH_COLOR(o.val); return c ? '</span>' : ''; }
+  if (o.tag === 'b') return '</strong>';
+  return '';
+}
+const RICH_TAGS = { size: 1, color: 1, b: 1 };
+function richParse(text) {
+  const src = String(text || '');
+  /* 成对的 ** 才算加粗，落单的那个按普通字留着 */
+  const pos = [];
+  for (let k = src.indexOf('**'); k >= 0; k = src.indexOf('**', k + 2)) pos.push(k);
+  const boldAt = new Set();
+  for (let j = 0; j + 1 < pos.length; j += 2) { boldAt.add(pos[j]); boldAt.add(pos[j + 1]); }
+  let out = '';
+  const stack = [];
+  let bold = 0;
+  let i = 0;
+  while (i < src.length) {
+    const m = src.slice(i).match(/^\{(\/)?(\w+)(?:=([^}]*))?\}/);
+    if (m && RICH_TAGS[m[2]]) {
+      const close = !!m[1];
+      const o = { tag: m[2], val: m[3] || '' };
+      if (close) {
+        let k = -1;
+        for (let j = stack.length - 1; j >= 0; j--) if (stack[j].tag === o.tag) { k = j; break; }
+        if (k >= 0) while (stack.length > k) out += richClose(stack.pop());
+      } else {
+        stack.push(o);
+        out += richOpen(o);
+      }
+      i += m[0].length;
+      continue;
+    }
+    if (src.startsWith('**', i) && boldAt.has(i)) {
+      /* 粗体也进栈：套在颜色里面时，标签才不会交叉 */
+      if (bold) {
+        let k = -1;
+        for (let j = stack.length - 1; j >= 0; j--) if (stack[j].tag === 'b') { k = j; break; }
+        if (k >= 0) while (stack.length > k) out += richClose(stack.pop());
+      } else {
+        stack.push({ tag: 'b', val: '' });
+        out += richOpen({ tag: 'b', val: '' });
+      }
+      bold = bold > 0 ? 0 : 1;
+      i += 2;
+      continue;
+    }
+    out += src[i];
+    i++;
+  }
+  while (stack.length) out += richClose(stack.pop());
+  return out;
+}
+/* 段首标记：摘出来变成样式，文字里就不留了 */
+function richPara(text) {
+  const st = [];
+  let t = String(text || '');
+  for (let i = 0; i < 6; i++) {
+    const m = t.match(/^\{(align|line|gap)(?:=([^}]*))?\}/);
+    if (!m) break;
+    const k = m[1], v = (m[2] || '').trim();
+    if (k === 'align' && /^(left|right|center|justify)$/.test(v)) st.push('text-align:' + v);
+    else if (k === 'line') { const n = RICH_NUM(v, 1, 4); if (n) st.push('line-height:' + n); }
+    else if (k === 'gap') { const n = RICH_NUM(v, 0, 6); if (n) st.push('margin-top:' + n + 'em;margin-bottom:' + n + 'em'); }
+    else break;
+    t = t.slice(m[0].length);
+  }
+  return { style: st.join(';'), text: t };
+}
+/* 段落容器要带的样式 */
+const richAttr = (text) => {
+  const p = richPara(text);
+  return p.style ? ' style="' + p.style + '"' : '';
+};
 function md(s) {
   if (!s) return '';
-  let t = esc(s);
-  t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  let t = richPara(esc(s)).text;      // 段首的标记先摘掉
+  t = richParse(t);                   // 行内的标记（容错解析，套乱的也还原）
   t = t.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (m, txt, url) => {
     if (/^https?:\/\//i.test(url)) return `<a href="${url}" target="_blank" rel="noopener noreferrer">${txt || url}</a>`;
     if (/^\.md$/i.test(url.split('#')[0])) {
@@ -1636,7 +1868,7 @@ function md(s) {
 const SKEY = 'lifebook.v1';
 const blank = () => ({ v: 1, ent: {}, custom: [], marks: [], thinks: [], dwell: {}, ttsMs: {},
   ui: { theme: 'auto', size: 'm', mode: 'read', ch: 1, sort: 'chapter', pos: {},
-        tts: { voiceName: '', rate: 1, pitch: 1, follow: true, wake: true, mute: false },
+        tts: { voiceName: '', rate: 1, pitch: 1, follow: true, wake: true, mute: false, cont: true },
         unlock: { level: 'std', timeOn: true } } });
 
 let store;
@@ -1743,7 +1975,7 @@ const buildHay = () => {
   HAY = new Map();
   for (const e of ALL) {
     const v = view(e);          // 改写过的条目，索引里要跟着改写后的走
-    HAY.set(e.id, [e.title, v.f['成本'], v.f['说人话'], v.f['收益'], v.f['来源'], v.f['备注']]
+    HAY.set(e.id, [e.title, v.f['成本'], paraBasis(v.f['说人话']), v.f['收益'], v.f['来源'], v.f['备注']]
       .join(' ').replace(/[*_`<>]/g, '').toLowerCase());
   }
 };
@@ -1753,7 +1985,7 @@ const hayOf = (e) => {
   let h = HAY.get(e.id);
   if (h === undefined) {
     const v = view(e);          // 同上：改写后的文字才该被搜到
-    h = [e.title, v.f['成本'], v.f['说人话'], v.f['收益'], v.f['来源'], v.f['备注']]
+    h = [e.title, v.f['成本'], paraBasis(v.f['说人话']), v.f['收益'], v.f['来源'], v.f['备注']]
       .join(' ').replace(/[*_`<>]/g, '').toLowerCase();
     HAY.set(e.id, h);
   }
@@ -2254,10 +2486,52 @@ const idbReady = (function () {
     };
     IDB.onsuccess = () => res(true);
     IDB.onerror = () => res(false);
-    setTimeout(() => res(false), 3000);
+    // 等 IndexedDB 别等太久：手机上它经常慢吞吞的，
+    // 等过了再开书，人已经等得不耐烦了。1.2 秒还没好就走退路。
+    setTimeout(() => res(false), 1200);
   });
 })();
 const db = () => (IDB && IDB.result) || null;
+
+/* ---------- 导入的书存哪儿 ----------
+   平常放在 IndexedDB（装得下整本书）。可 Safari 用「本地文件」打开时
+   不让用 IndexedDB：书就只剩个内存里的壳，关掉页面就没了——
+   用户看到的就是「书和改写都存不住」。
+   所以留一条退路：IndexedDB 用不了就塞进 localStorage（小书放得下）。 */
+const BOOK_LS_KEY = 'lifebook.books';
+function lsBookMap() {
+  try { return JSON.parse(localStorage.getItem(BOOK_LS_KEY) || '{}'); } catch (e) { return {}; }
+}
+function lsPutBook(b) {
+  try {
+    const m = lsBookMap();
+    m[b.id] = b;
+    localStorage.setItem(BOOK_LS_KEY, JSON.stringify(m));
+    return true;
+  } catch (e) { return false; }        // 太大了就装不下
+}
+function lsGetBook(id) { return lsBookMap()[id] || null; }
+function lsDelBook(id) {
+  try { const m = lsBookMap(); delete m[id]; localStorage.setItem(BOOK_LS_KEY, JSON.stringify(m)); } catch (e) {}
+}
+/* 存一本书：先试 IndexedDB，不动就退到 localStorage */
+function putBook(b) {
+  if (!b || !b.id) return Promise.resolve(false);
+  if (!db()) return Promise.resolve(lsPutBook(b));
+  return idbPut('books', b.id, b).then((ok) => ok ? true : lsPutBook(b));
+}
+/* 取一本书：IndexedDB 里没有，再去退路里找 */
+function getBook(id) {
+  if (db()) return idbReq('books', 'readonly', { k: id }).then((b) => b || lsGetBook(id));
+  return Promise.resolve(lsGetBook(id));
+}
+function delBook(id) {
+  lsDelBook(id);
+  if (db()) return idbDel('books', id);
+  return Promise.resolve(true);
+}
+/* 这个环境存不存得住整本书 */
+const canStoreBig = () => !!db();
 function idbReq(store, mode, fn) {
   return new Promise((res) => {
     if (!db()) return res(null);
@@ -2377,6 +2651,258 @@ function setEditedText(eid, text, orig) {
     r.e.f = Object.assign({}, e.f, r.e.f, { '说人话': text });
   }
 }
+/* ---------- 改写工具条 ---------- */
+function richBarHTML() {
+  return '<div class="rbar">' +
+    '<span class="rgrp"><span class="rgrp-t">字号</span>' +
+      '<button data-r="size" data-v="0.9" title="小一号">小</button>' +
+      '<button data-r="size" data-v="1.15" title="中">中</button>' +
+      '<button data-r="size" data-v="1.45" title="大一号">大</button>' +
+      '<button data-r="size" data-v="1.8" title="特大">特大</button>' +
+    '</span>' +
+    '<span class="rgrp"><span class="rgrp-t">字样</span>' +
+      '<button data-r="bold" class="b" title="加粗（再点一次取消）">加粗</button>' +
+    '</span>' +
+    '<span class="rgrp"><span class="rgrp-t">颜色</span>' +
+      '<button data-r="color" data-v="#b0442f" class="swatch" style="background:#b0442f" title="朱红"></button>' +
+      '<button data-r="color" data-v="#c8891b" class="swatch" style="background:#c8891b" title="琥珀"></button>' +
+      '<button data-r="color" data-v="#1f6b5c" class="swatch" style="background:#1f6b5c" title="墨绿"></button>' +
+      '<button data-r="color" data-v="#3a5b9a" class="swatch" style="background:#3a5b9a" title="靛蓝"></button>' +
+      '<input type="color" data-r="colorpick" value="#b0442f" title="自己挑一个颜色">' +
+    '</span>' +
+    '<span class="rgrp"><span class="rgrp-t">对齐</span>' +
+      '<button data-r="align" data-v="left" title="靠左">左</button>' +
+      '<button data-r="align" data-v="center" title="居中">中</button>' +
+      '<button data-r="align" data-v="right" title="靠右">右</button>' +
+      '<button data-r="align" data-v="justify" title="两端对齐">两端</button>' +
+    '</span>' +
+    '<span class="rgrp"><span class="rgrp-t">行距</span>' +
+      '<button data-r="line" data-v="1.5" title="行距紧一点">紧</button>' +
+      '<button data-r="line" data-v="1.82" title="行距正常">常规</button>' +
+      '<button data-r="line" data-v="2.3" title="行距松一点">松</button>' +
+    '</span>' +
+    '<span class="rgrp"><span class="rgrp-t">段距</span>' +
+      '<button data-r="gap" data-v="0" title="段前段后不留空">无</button>' +
+      '<button data-r="gap" data-v="0.8" title="段前段后留一点">小</button>' +
+      '<button data-r="gap" data-v="1.6" title="段前段后留多些">大</button>' +
+    '</span>' +
+    '<span class="rgrp"><button data-r="undo" title="撤销上一步">↩ 撤销</button></span>' +
+  '</div>';
+}
+
+/* ---------- 所见即所得的改写框 ----------
+   正文里直接就是排好版的样子：选中字点「加粗」，字当场变粗，
+   不用再对着 {size=1.3} 这种标记猜。
+   存的时候才把样式翻译回标记——划线、批注、朗读都按正文的字序算，
+   翻译回去才不乱。 */
+function richEditorHTML(text) {
+  const paras = splitParas(String(text || ''));
+  if (!paras.length) return '<div><br></div>';
+  return paras.map((p) => {
+    const st = richPara(p);
+    const attr = st.style ? ' style="' + st.style + '"' : '';
+    return '<div' + attr + '>' + richParse(esc(st.text)) + '</div>';
+  }).join('');
+}
+/* 颜色：rgb() 变 #rrggbb */
+function cssHex(c) {
+  const s = String(c || '').trim().toLowerCase();
+  let m = s.match(/^#([0-9a-f]{3})$/);
+  if (m) return '#' + m[1].split('').map((x) => x + x).join('');
+  m = s.match(/^#([0-9a-f]{6})$/);
+  if (m) return '#' + m[1];
+  m = s.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (m) {
+    const h = (n) => ('0' + Number(n).toString(16)).slice(-2);
+    return '#' + h(m[1]) + h(m[2]) + h(m[3]);
+  }
+  return '';
+}
+/* 字号：px / em 都变成倍数 */
+function cssEm(v) {
+  const s = String(v || '').trim();
+  let m = s.match(/^([\d.]+)em$/);
+  if (m) return String(Math.round(parseFloat(m[1]) * 100) / 100);
+  m = s.match(/^([\d.]+)px$/);
+  if (m) return String(Math.round(parseFloat(m[1]) / 16 * 100) / 100);
+  m = s.match(/^([\d.]+)$/);
+  if (m) return String(Math.round(parseFloat(m[1]) * 100) / 100);
+  return '';
+}
+/* 框里的排版，翻译回正文里的标记 */
+function richSerNode(node) {
+  if (node.nodeType === 3) return node.nodeValue;
+  if (node.nodeType !== 1) return '';
+  const tag = (node.tagName || '').toUpperCase();
+  if (tag === 'BR') return '\n';
+  let inner = '';
+  for (const c of node.childNodes) inner += richSerNode(c);
+  const st = node.style || {};
+  let out = inner;
+  const fw = String(st.fontWeight || '').toLowerCase();
+  if (tag === 'B' || tag === 'STRONG' || fw === 'bold' || fw === 'bolder' || /^[5-9]00$/.test(fw)) out = '**' + out + '**';
+  const col = cssHex(st.color);
+  if (col && col !== '#000000') out = '{color=' + col + '}' + out + '{/color}';
+  const fs = cssEm(st.fontSize);
+  if (fs) out = '{size=' + fs + '}' + out + '{/size}';
+  return out;
+}
+/* 整框：段落级的设置写在段首，行内的包住那几个字 */
+function richSerialize(ed) {
+  const blocks = Array.from(ed.childNodes).filter((n) => n.nodeType === 1);
+  const paras = [];
+  for (const b of blocks) {
+    let inner = '';
+    for (const c of b.childNodes) inner += richSerNode(c);
+    const st = b.style || {};
+    let pre = '';
+    const al = String(st.textAlign || '').toLowerCase();
+    if (al && al !== 'left' && al !== 'start') pre += '{align=' + al + '}';
+    const lh = String(st.lineHeight || '').trim();
+    if (lh && lh !== 'normal') {
+      const n = parseFloat(lh);
+      if (n) pre += '{line=' + (Math.round(n * 100) / 100) + '}';
+    }
+    const mt = parseFloat(st.marginTop || '');
+    if (mt) pre += '{gap=' + (Math.round(mt * 100) / 100) + '}';
+    paras.push(pre + inner);
+  }
+  return paras.join('\n\n');
+}
+/* 取编辑框的值：富文本框翻译回标记，普通输入框直接取 */
+function richValue(sh, fld) {
+  const el = sh.el.querySelector('[data-fld="' + fld + '"]');
+  if (!el) return '';
+  if (el.hasAttribute && el.hasAttribute('data-rich')) return richSerialize(el);
+  return el.value || '';
+}
+/* 工具条作用在哪个框上 */
+let RICH_TA = null;
+function richTarget(sh) {
+  const t = RICH_TA;
+  if (t && t.isConnected && sh.el.contains(t)) return t;
+  const list = $$('[data-rich]', sh.el);
+  return list[0] || null;
+}
+/* 光标现在在哪一段 */
+function richBlock(ed) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return ed.firstElementChild;
+  let n = sel.getRangeAt(0).startContainer;
+  if (n && n.nodeType === 3) n = n.parentNode;
+  while (n && n !== ed) {
+    if (n.nodeType === 1 && (n.tagName === 'DIV' || n.tagName === 'P')) return n;
+    n = n.parentNode;
+  }
+  return ed.firstElementChild;
+}
+/* 工具条按钮会抢焦点，焦点一走选区就没了——
+   先把选区存下来，点完按钮再放回去。 */
+let RICH_SEL = null;
+function richSaveSel() {
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && !sel.isCollapsed) {
+    try { RICH_SEL = sel.getRangeAt(0).cloneRange(); } catch (e) {}
+  }
+}
+function richRestoreSel() {
+  if (!RICH_SEL) return false;
+  try {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(RICH_SEL);
+    return !sel.isCollapsed;
+  } catch (e) { return false; }
+}
+/* 选中的那几个字，HTML 长什么样 */
+function richSelHtml(sel) {
+  try {
+    const r = sel.getRangeAt(0).cloneContents();
+    const d = document.createElement('div');
+    d.appendChild(r);
+    return d.innerHTML;
+  } catch (e) { return ''; }
+}
+/* 套格式：用浏览器自己的排版命令，改过的字不会越套越乱 */
+function richApply(sh, kind, val) {
+  const ed = richTarget(sh);
+  if (!ed) { toast('这里改不了格式', 'err'); return; }
+  ed.focus();
+  let sel = window.getSelection();
+  let hasSel = sel && sel.rangeCount && !sel.isCollapsed;
+  if (!hasSel) { hasSel = richRestoreSel(); sel = window.getSelection(); }
+  if (kind === 'undo') {
+    let ok = false;
+    try { ok = document.execCommand('undo'); } catch (e) { ok = false; }
+    if (!ok) toast('没有可撤销的了', 'err');
+    return;
+  }
+  if (kind === 'bold') {
+    if (!hasSel) return toast('先选中要加粗的字', 'err');
+    document.execCommand('bold');
+    return;
+  }
+  if (kind === 'color') {
+    if (!hasSel) return toast('先选中要改色的字', 'err');
+    document.execCommand('foreColor', false, val);
+    return;
+  }
+  if (kind === 'size') {
+    if (!hasSel) return toast('先选中要改大小的字', 'err');
+    const html = richSelHtml(sel);
+    if (!html) return;
+    document.execCommand('insertHTML', false, '<span style="font-size:' + val + 'em">' + html + '</span>');
+    return;
+  }
+  const b = richBlock(ed);
+  if (!b) return;
+  if (kind === 'align') {
+    const cmd = { left: 'justifyLeft', center: 'justifyCenter', right: 'justifyRight', justify: 'justifyFull' }[val];
+    if (cmd) document.execCommand(cmd);
+    return;
+  }
+  if (kind === 'line') { b.style.lineHeight = val; return; }
+  if (kind === 'gap') {
+    b.style.marginTop = val === '0' ? '' : val + 'em';
+    b.style.marginBottom = val === '0' ? '' : val + 'em';
+    return;
+  }
+}
+/* 把工具条接到弹层上 */
+function richBind(sh) {
+  const head = $('.sheet-head', sh.el);
+  const syncHead = () => {
+    if (head) sh.el.style.setProperty('--head-h', head.offsetHeight + 'px');
+  };
+  syncHead();
+  setTimeout(syncHead, 40);
+  window.addEventListener('resize', syncHead);
+  try { document.execCommand('styleWithCSS', false, true); } catch (e) {}
+  sh.el.addEventListener('focusin', (ev) => {
+    const t = ev.target && ev.target.closest ? ev.target.closest('[data-rich]') : null;
+    if (t) RICH_TA = t;
+  });
+  sh.el.addEventListener('mousedown', (ev) => {
+    const b = ev.target.closest('button[data-r]');
+    if (b) {
+      richSaveSel();
+      ev.preventDefault();          // 别把选区弄没了
+      return;
+    }
+    if (ev.target.closest('input[data-r="colorpick"]')) richSaveSel();
+  });
+  sh.el.addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-r]');
+    if (!b) return;
+    richApply(sh, b.dataset.r, b.dataset.v || '');
+  });
+  sh.el.addEventListener('change', (ev) => {
+    const c = ev.target.closest('input[data-r="colorpick"]');
+    if (!c) return;
+    richApply(sh, 'color', c.value);
+  });
+}
+
 /* 改写这一段 */
 function openEditParaSheet(eid) {
   const e = BY_ID.get(eid);
@@ -2384,10 +2910,12 @@ function openEditParaSheet(eid) {
   const orig = e.f['说人话'] || '';
   const cur = view(e).f['说人话'] || orig;
   const sh = openSheet('改写这一段',
-    '<textarea class="edit-area" data-fld="text" rows="12" style="min-height:260px">' + esc(cur) + '</textarea>' +
+    '<div class="rich-edit" contenteditable="true" spellcheck="false" data-rich data-fld="text">' + richEditorHTML(cur) + '</div>' +
     (cur !== orig ? '<div class="edit-bar" style="margin-top:16px"><button class="btn" data-revert>还原成原文</button></div>' : ''),
     { actions: '<button class="btn btn-primary btn-sm" data-save>存下</button>' +
-               '<button class="btn btn-sm" data-sheet-close>取消</button>' });
+               '<button class="btn btn-sm" data-sheet-close>取消</button>',
+      bar: richBarHTML() });
+  richBind(sh);
   sh.el.addEventListener('click', (ev) => {
     if (ev.target.closest('[data-revert]')) {
       setEditedText(eid, orig, orig);
@@ -2398,7 +2926,7 @@ function openEditParaSheet(eid) {
       return;
     }
     if (!ev.target.closest('[data-save]')) return;
-    const val = sh.el.querySelector('[data-fld="text"]').value;
+    const val = richValue(sh, 'text');
     if (!val.trim()) return toast('正文不能是空的', 'err');
     setEditedText(eid, val, orig);
     const res = reanchorEntries(new Set([eid]), [{ eid: eid, text: val }]);
@@ -2429,13 +2957,15 @@ function openEditChapterSheet(chId) {
   if (!items.length) return toast('这一章没有内容', 'err');
   const text = items.map((e) => e.f['说人话'] || '').join('\n\n');
   const ci = Number(String(ch.id).split(':')[1] || 0);
-  const sh = openSheet('改写「' + ch.title + '」',
-    '<textarea class="edit-area" data-fld="text" rows="14" style="min-height:320px">' + esc(text) + '</textarea>',
+  const sh = openSheet('改写「' + String(ch.title || '').replace(/^#+\s*/, '') + '」',
+    '<div class="rich-edit" contenteditable="true" spellcheck="false" data-rich data-fld="text">' + richEditorHTML(text) + '</div>',
     { actions: '<button class="btn btn-primary btn-sm" data-save>换掉这一章</button>' +
-               '<button class="btn btn-sm" data-sheet-close>取消</button>' });
+               '<button class="btn btn-sm" data-sheet-close>取消</button>',
+      bar: richBarHTML() });
+  richBind(sh);
   sh.el.addEventListener('click', (ev) => {
     if (!ev.target.closest('[data-save]')) return;
-    const val = sh.el.querySelector('[data-fld="text"]').value;
+    const val = richValue(sh, 'text');
     const paras = splitParas(val);
     if (!paras.length) return toast('这一章不能是空的', 'err');
     const oldEids = new Set(items.map((e) => e.id));
@@ -2467,7 +2997,7 @@ function openEditChapterSheet(chId) {
     /* 删掉的段落在 store.ent 里也别留残渣 */
     for (const eid of oldEids) if (!BY_ID.has(eid) && store.ent[eid]) delete store.ent[eid];
     HAY && (HAY = null);
-    idbPut('books', b.id, b);
+    putBook(b);
     save(); sh.close(); render(true);
     toast(res.lost
       ? ('这一章换好了；' + res.lost + ' 条划线/批注对不上原文了，标在标签页里')
@@ -2585,7 +3115,12 @@ function addBook(file, text) {
   ALL.push(...book.entries);
   HAY && book.entries.forEach((e) => HAY.delete(e.id));
   BOOKS.push(book);
-  idbPut('books', id, book);
+  const stored = putBook(book);
+  if (!db()) {
+    toast('这个打开方式存不住大书：书改存在浏览器缓存里（上限约 5MB），换用网址打开就没有这个限制');
+  } else {
+    stored.then((ok) => { if (!ok) toast('这本书太大，浏览器存不下（上限约 5MB）；换用网址打开就能存'); });
+  }
   return book;
 }
 function renameBook(id, name) {
@@ -2594,7 +3129,7 @@ function renameBook(id, name) {
   if (!b || !n) return false;
   b.name = n;
   if (b.builtin) { store.ui.builtinName = n; save(); render(); return true; }
-  idbPut('books', b.id, b);
+  putBook(b);
   save();
   render();
   return true;
@@ -2607,10 +3142,16 @@ function openRenameSheet(id) {
     'style="width:100%;height:38px;padding:0 12px;margin-top:10px;font-size:15px;background:var(--surface-2);' +
     'border:1px solid var(--border-strong);border-radius:8px;color:var(--text)">' +
     '<div class="edit-bar" style="margin-top:16px"><button class="btn btn-primary" data-save>保存</button>' +
-    '<button class="btn" data-sheet-close>取消</button></div>');
+    '<button class="btn" data-sheet-close>取消</button>' +
+    '<button class="btn" data-goto-books>去书架</button></div>');
   const inp = sh.el.querySelector('#rename-in');
   if (inp) { inp.focus(); inp.select(); }
   sh.el.addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-goto-books]')) {
+      sh.close();
+      location.hash = 'books';
+      return;
+    }
     if (!ev.target.closest('[data-save]')) return;
     const v = sh.el.querySelector('#rename-in').value.trim();
     if (!v) return toast('名字不能空着', 'err');
@@ -2628,7 +3169,7 @@ async function removeBook(id) {
     const i = ALL.indexOf(e); if (i > -1) ALL.splice(i, 1);
     HAY && HAY.delete(e.id);
   }
-  await idbDel('books', id);
+  await delBook(id);
 }
 function curBook() { return BOOKS.find((b) => b.id === S_BOOK) || BOOKS[0] || BUILTIN(); }
 
@@ -2677,7 +3218,7 @@ function scopeBookIds() {
   for (const m of store.marks) if (legacy.has(m.eid)) m.eid = legacy.get(m.eid);
   for (const t of store.thinks || []) if (legacy.has(t.eid)) t.eid = legacy.get(t.eid);
   saveNow();
-  for (const b of books) idbPut('books', b.id, b);          // 存回 IndexedDB
+  for (const b of books) putBook(b);                       // 存回 IndexedDB（用不了就退到 localStorage）
 }
 function bookChapterList(b) {
   if (!b || b.builtin) return CHAPTERS.map((c) => ({ id: c.id, num: c.num, title: c.title, count: (BY_CH.get(c.id) || []).length }));
@@ -2756,6 +3297,7 @@ function applyTheme() {
   const dark = t === 'dark' || (t === 'auto' && THEME_AUTO_DARK());
   const root = document.documentElement;
   root.classList.toggle('dark', dark);
+  if (typeof renderWatermark === 'function') renderWatermark();
   root.classList.remove('t-sepia', 't-gray', 't-green', 't-blue');
   if (!dark && t && t !== 'light' && t !== 'auto') root.classList.add('t-' + t);
   const meta = document.querySelector('meta[name="theme-color"]');
@@ -2778,12 +3320,146 @@ function renderCredit() {
   if (!el) return;
   const b = curBook();
   if (b && !b.builtin) {
-    el.innerHTML = '<span class="credit-t">《' + esc(b.name) + '》· 本地导入</span>';
+    /* 导入的书：顶上写当前这一章的题目；
+       右边那一块留给你自己写点什么（账户名、签名、书名都行） */
+    const ch = resolveChapter(S.ch);
+    /* 章名里可能还带着书里的 # 标记，顶上显示时去掉 */
+    const t = ((ch && ch.title) ? ch.title : b.name).replace(/^#+\s*/, '');
+    const tag = creditTag();
+    el.innerHTML = '<span class="credit-t">' + esc(t) + '</span>' +
+      (tag ? '<button class="credit-link credit-name" data-credit-tag title="改这里显示什么">' + esc(tag) + '</button>' : '');
     return;
   }
   el.innerHTML = '<span class="credit-t">出自《' + esc(D.meta.title) + '》，' + esc(D.meta.license) + '</span>' +
     '<a class="credit-link" href="https://eternity4719.github.io/HowToLiveBetter/" target="_blank" rel="noopener noreferrer">原书</a>' +
     '<a class="credit-link" href="https://pan.baidu.com/s/1Orkh_SGq7d5hTue3REfPHA?pwd=8888" target="_blank" rel="noopener noreferrer">PDF</a>';
+}
+
+/* ---------- 顶栏右上角那一块：给你自己写点什么 ---------- */
+/* 留空就显示账户名；账户名也没设，就空着。想写别的就直接写。 */
+function creditTag() {
+  const t = String(store.ui.tagline || '').trim();
+  if (t) return t;
+  return String(store.ui.name || '').trim();
+}
+function openCreditTagSheet() {
+  const cur = String(store.ui.tagline || '').trim();
+  const name = String(store.ui.name || '').trim();
+  const sh = openSheet('顶栏右上角',
+    '<p style="font-size:12.5px;color:var(--muted)">这一块留给你自己写点什么：账户名、一句签名、书名都行（最多 24 字）。' +
+    '留空就显示账户名；账户名也没设，就空着。</p>' +
+    '<input class="edit-input" data-fld="tag" maxlength="24" value="' + esc(cur) + '" ' +
+    'style="width:100%;height:38px;padding:0 12px;margin-top:10px;font-size:15px;background:var(--surface-2);' +
+    'border:1px solid var(--border-strong);border-radius:8px;color:var(--text)" ' +
+    'placeholder="' + esc(name ? name : '比如：小明') + '">' +
+    '<div class="edit-bar" style="margin-top:16px"><button class="btn btn-primary" data-save>存下</button>' +
+    '<button class="btn" data-use-name>' + (name ? '用账户名' : '没设账户名') + '</button>' +
+    '<button class="btn" data-sheet-close>取消</button></div>');
+  const inp = sh.el.querySelector('[data-fld="tag"]');
+  if (inp) { inp.focus(); inp.select(); }
+  sh.el.addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-use-name]')) {
+      if (!name) { toast('还没设账户名（「我的」里可以设）', 'err'); return; }
+      store.ui.tagline = name;
+      save(); sh.close(); render(true);
+      toast('顶栏显示：' + name);
+      return;
+    }
+    if (!ev.target.closest('[data-save]')) return;
+    store.ui.tagline = (sh.el.querySelector('[data-fld="tag"]').value || '').trim();
+    save(); sh.close(); render(true);
+    toast(store.ui.tagline ? ('顶栏显示：' + store.ui.tagline) : '顶栏那一块空着了');
+  });
+}
+
+/* 正文水印的内容：跟顶栏右上角一个路数，点一下就改 */
+function openWatermarkSheet() {
+  const w = wmCfg();
+  const name = String(store.ui.name || '').trim();
+  const sh = openSheet('正文水印',
+    '<p style="font-size:12.5px;color:var(--muted)">水印一直开着，写什么就铺什么。</p>' +
+    '<input class="edit-input" data-fld="wm" maxlength="24" value="' + esc(w.text || '') + '" ' +
+    'style="width:100%;height:38px;padding:0 12px;margin-top:10px;font-size:15px;background:var(--surface-2);' +
+    'border:1px solid var(--border-strong);border-radius:8px;color:var(--text)" ' +
+    'placeholder="' + esc(name || '比如：小明') + '">' +
+    '<div class="edit-bar" style="margin-top:16px"><button class="btn btn-primary" data-save>存下</button>' +
+    '<button class="btn" data-use-name>' + (name ? '用账户名' : '没设账户名') + '</button>' +
+    (w.on ? '<button class="btn" data-off>不用水印</button>' : '') +
+    '<button class="btn" data-sheet-close>取消</button></div>');
+  const inp = sh.el.querySelector('[data-fld="wm"]');
+  if (inp) { inp.focus(); inp.select(); }
+  sh.el.addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-off]')) {
+      w.on = false; save(); sh.close(); refreshSettings();
+      renderWatermark();
+      toast('水印关了');
+      return;
+    }
+    if (ev.target.closest('[data-use-name]')) {
+      if (!name) { toast('还没设账户名（「我的」里可以设）', 'err'); return; }
+      w.text = name; w.on = true; save(); sh.close(); refreshSettings();
+      renderWatermark();
+      toast('水印内容：' + name);
+      return;
+    }
+    if (!ev.target.closest('[data-save]')) return;
+    w.text = (sh.el.querySelector('[data-fld="wm"]').value || '').trim();
+    w.on = true;
+    save(); sh.close(); refreshSettings();
+    renderWatermark();
+    toast(w.text ? ('水印内容：' + w.text) : '水印用账户名');
+  });
+}
+
+/* ---------- 水印 ----------
+   正文上淡淡铺一层字：默认是账户名，设置里能开关、也能自己写。
+   截图也带得上——比什么版权声明都管用。 */
+function wmCfg() {
+  /* 水印常开：要关也行，但默认是开的 */
+  store.ui.wm = store.ui.wm || { on: true, text: '' };
+  if (store.ui.wm.on === undefined) store.ui.wm.on = true;
+  return store.ui.wm;
+}
+function wmText() {
+  const w = wmCfg();
+  return String(w.text || (store.ui.name || '')).trim();
+}
+/* 水印的底纹：一个小小的方块，斜着写一遍名字 */
+function wmTile(text, color, w, h, fs) {
+  const t = String(text).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='" + w + "' height='" + h + "'>" +
+    "<g transform='rotate(-22 " + (w / 2) + " " + (h / 2) + ")'>" +
+    "<text x='" + (w / 2) + "' y='" + (h / 2) + "' text-anchor='middle' font-family='sans-serif' " +
+    "font-size='" + fs + "' font-weight='700' fill='" + color + "'>" + t + '</text></g></svg>';
+  return 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")';
+}
+function renderWatermark() {
+  const main = $('#main');
+  if (!main) return;
+  let el = document.getElementById('wm');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'wm';
+    el.setAttribute('aria-hidden', 'true');
+  }
+  if (el.parentElement !== main) main.appendChild(el);   // 重画正文后要接回去
+  const w = wmCfg();
+  const text = wmText();
+  const on = !!(w.on && text && S.mode === 'read');
+  const dark = document.documentElement.classList.contains('dark');   // 主题的 dark 类在 html 上
+  const color = dark ? 'rgba(255,255,255,0.055)' : 'rgba(0,0,0,0.05)';
+  const sig = (on ? '1' : '0') + '|' + text + '|' + color;
+  /* 气泡是深底的，水印要用浅色才看得见：单独做一份 */
+  const popUrl = text ? wmTile(text, 'rgba(255,255,255,0.075)', 190, 120, 15) : 'none';
+  document.documentElement.style.setProperty('--wm-pop', popUrl);
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.classList.toggle('on', on);
+  if (!on) { el.style.backgroundImage = ''; return; }
+  /* 铺得密一些：一张小底纹 repeating，截图裁不掉 */
+  el.style.backgroundImage = wmTile(text, color, 230, 145, 17);
+  el.style.backgroundSize = '230px 145px';
 }
 
 /* ---------- 侧栏 ---------- */
@@ -2873,7 +3549,7 @@ function renderSide() {
           ' <span class="count">' + enHit.length + (enHit.length === 60 ? '+' : '') + '</span></div>' +
           enHit.map((e) => {
             const c = entryChapter(e);
-            const body = (view(e).f['说人话'] || '').replace(/\s+/g, ' ').trim();
+            const body = paraBasis(view(e).f['说人话'] || '').replace(/\s+/g, ' ').trim();
             const label = e.title || snippetAround(body, [S.sideQ.trim()], 46);
             const where = e.book
               ? (c ? esc(c.title) : '')
@@ -2961,7 +3637,7 @@ function renderSide() {
       }[key] || (() => false);
       rows = ALL.filter(f).map((e) => ({
         id: e.id,
-        t: (view(e).f['说人话'] || e.title || '').replace(/\s+/g, ' ').trim().slice(0, 60),
+        t: paraBasis(view(e).f['说人话'] || e.title || '').replace(/\s+/g, ' ').trim().slice(0, 60),
         s: entryChip(e),
       }));
     }
@@ -3130,7 +3806,10 @@ function cardHTML(e, opts) {
   const v = view(e);
   const r = store.ent[e.id] || {};
   const id = e.id;
-  const open = opts.open || opts.target;
+  /* 展开状态记在数据里：以前只写在 DOM 上，
+     重画一次（划线、批注之后都会重画）卡片就收起来了，
+     下面那段文字跟着往上缩——看着就是猛地一跳。 */
+  const open = opts.open || opts.target || !!(r && r.open);
   const ch = entryChapter(e);
 
   let flags = '';
@@ -3145,8 +3824,8 @@ function cardHTML(e, opts) {
   const plain = v.f['说人话'] || v.f['收益'] || '';
   const fieldHTML = e.plainCard ? '' : FIELDS.filter((k) => k !== '说人话' && v.f[k]).map((k) => {
     const body = k === '来源'
-      ? '<div class="field-body field-src">' + md(v.f[k]) + '</div>'
-      : '<div class="field-body' + (k === '备注' ? ' field-note' : '') + '">' + md(v.f[k]) + '</div>';
+      ? '<div class="field-body field-src"' + richAttr(v.f[k]) + '>' + md(v.f[k]) + '</div>'
+      : '<div class="field-body' + (k === '备注' ? ' field-note' : '') + '"' + richAttr(v.f[k]) + '>' + md(v.f[k]) + '</div>';
     return '<div class="field" data-field="' + k + '">' +
       '<div class="field-label">' + k + '</div>' + body + '</div>';
   }).join('');
@@ -3160,7 +3839,7 @@ function cardHTML(e, opts) {
       '<h3 class="card-title">' + md(v.title) + '</h3></div>' +
       ((!e.plainCard && flags) ? '<div class="card-flags">' + flags + '</div>' : '') +
     '</div>') +
-    (plain ? '<div class="card-plain' + (e.plainCard ? ' book' : '') + '">' + md(plain) + '</div>' : '') +
+    (plain ? '<div class="card-plain' + (e.plainCard ? ' book' : '') + '"' + richAttr(plain) + '>' + md(plain) + '</div>' : '') +
     (e.plainCard && isBookEditable(curBook())
       ? PLAIN_ACT.replace('<button class="card-act card-act-restore"', isEdited(id) ? '<button class="card-act card-act-restore"' : '<button class="card-act card-act-restore" hidden')
       : '') +
@@ -3251,7 +3930,6 @@ function renderRead() {
     '</div>' +
     '<h1 class="ch-title">' + esc(ch.title) + '</h1>' +
   ((ch.plainBook || isBookEditable(bk)) ? '<div class="ch-tools">' +
-    (ch.plainBook ? '<button class="btn btn-sm" data-act="speak" title="把这一章念出来">🔊 朗读本章</button>' : '') +
     (isBookEditable(bk) ? '<button class="btn btn-sm" data-act="edit-chapter">✎ 改写这一章</button>' : '') +
     '</div>' : '') +
   '</div>';
@@ -3545,7 +4223,7 @@ function renderTags() {
         '<div class="tag-mine">' + esc(x.a.b) + '</div>' +
         '<div class="tag-src">' + where +
         (x.a.c ? ' · ' + new Date(x.a.c).toLocaleDateString('zh-CN') : '') + '</div></div>' +
-        '<button class="icon-btn" data-act="share-anno" data-id="' + esc(x.a.id) + '" title="做成书摘">' + ICON.card + '</button>' +
+        '<button class="icon-btn" data-act="share-anno" data-id="' + esc(x.a.id) + '" title="分享这条批注">' + ICON.card + '</button>' +
         '<button class="icon-btn" data-act="del-anno" data-id="' + esc(x.a.id) + '" title="删除批注">' + ICON.trash + '</button>' +
         '</div>';
     }).join('') : emptyBox('这本书还没有批注', '在正文里选中一段话，就会浮出「批注」。写的话紧跟在那句话后面。')) +
@@ -3705,7 +4383,7 @@ function itemRow(e, note, clearKind) {
   const c = entryChapter(e);
   const plain = e.plainCard;
   // 导入的书没有条目标题，用正文开头那一截顶上
-  const raw = (plain ? (v.f['说人话'] || '') : v.title).replace(/\s+/g, ' ').trim();
+  const raw = (plain ? paraBasis(v.f['说人话'] || '') : v.title).replace(/\s+/g, ' ').trim();
   const title = plain ? (raw.length > 60 ? raw.slice(0, 60) + '…' : raw) : v.title;
   const where = plain
     ? (c ? esc(c.title) : '')
@@ -3767,7 +4445,7 @@ function exportBookById(id) {
   const b = BOOKS.find((x) => x.id === id);
   if (!b) return;
   if (b.builtin) return exportBook();
-  return exportBookText(b);
+  return exportBookText(b, true);
 }
 /* PDF 原样导出；删过页的，导出时真的把那些页抠掉 */
 /* ---------- 阅读统计：记下每天读了多久 ---------- */
@@ -4039,7 +4717,7 @@ function renderMine() {
       '<div class="mine-head-row">' +
         '<h1 class="mine-title mine-name" data-set-name title="点一下改账户名">' +
           (accName ? esc(accName) : '我的') + '</h1>' +
-        '<button class="btn btn-sm" data-open-settings>设置 ⚙️</button>' +
+        '<button class="btn btn-sm" data-io-sheet>导入 / 导出</button>' +
         '<button class="btn btn-sm" data-share-stats>分享</button>' +
       '</div>' +
     '</div>' +
@@ -4399,8 +5077,19 @@ function openGoalSheet() {
 /* ---------- 设置 ---------- */
 function settingsBodyHTML() {
   const R = unlockRules();
-  const U = store.ui.unlock || {};
-  return '<h4>配色</h4>' +
+  const bk = curBook();
+  const canEdit = !!(bk && !bk.builtin);
+  const editable = canEdit && isBookEditable(bk);
+  const cont = !!(TTS.plan && TTS.plan.on);
+  const wm = wmCfg();
+  const sw = (on) => '<span class="sw' + (on ? ' on' : '') + '"><i></i></span>';
+  const row = (ico, title, act, swOn, extra) =>
+    '<button class="menu-item"' + (act ? ' ' + act : '') + (extra || '') + '>' +
+      '<span class="mi-ico">' + ico + '</span>' +
+      '<span class="mi-l">' + title + '</span>' +
+      (swOn === undefined ? '' : sw(swOn)) +
+    '</button>';
+  return '<h4>外观</h4>' +
     '<div class="theme-grid">' +
     [['light', '纸白', '#f7f6f3', '#1c1b19'], ['dark', '夜黑', '#131419', '#e7e5e0'],
      ['sepia', '米黄', '#f4ece0', '#3a3025'], ['gray', '雾灰', '#eef0f1', '#22282c'],
@@ -4412,58 +5101,25 @@ function settingsBodyHTML() {
     '<div class="seg">' +
     [['s', '小'], ['m', '中'], ['l', '大'], ['xl', '特大']].map(([k, l]) =>
       '<button data-size="' + k + '"' + (store.ui.size === k ? ' class="on"' : '') + '>' + l + '</button>').join('') + '</div>' +
-    '<h4>朗读</h4>' +
+    '<h4>阅读</h4>' +
     '<div class="menu-list">' +
-      '<button class="menu-item" data-tts-cont>' +
-        '<span class="mi-ico">🔊</span>' +
-        '<span><span>连续朗读</span><span class="mi-s">' +
-          (curBook() && curBook().builtin ? '念完本章，接着念下一章（导入的书才用得上）' : '念完本章，接着念下一章') +
-        '</span></span>' +
-        '<span class="sw' + (TTS.plan && TTS.plan.on ? ' on' : '') + '"><i></i></span>' +
-      '</button>' +
+      row('🔊', '连续朗读', 'data-tts-cont', cont) +
+      row(R.on ? '🔒' : '🔓', '章节锁', 'data-ulock-toggle', R.on) +
+      row('✎', '改正文', 'data-edit-toggle' + (canEdit ? '' : ' disabled'), editable) +
     '</div>' +
-    /* 改正文：书多了很长，折叠起来，只留一行「几本书、几本能改」 */
-    (function () {
-      const list = BOOKS.filter((b) => !b.builtin);
-      const on = list.filter((b) => isBookEditable(b)).length;
-      const open = !!(store.ui.fold && store.ui.fold.edit);
-      const head = '<div class="menu-list">' +
-        '<button class="menu-item" data-fold="edit">' +
-          '<span class="mi-ico">✎</span>' +
-          '<span><span>改正文</span><span class="mi-s">' +
-            (list.length ? list.length + ' 本书 · ' + on + ' 本可以直接改' : '还没有导入的书') +
-          '</span></span>' +
-          '<span class="mi-fold">' + (open ? '▾' : '▸') + '</span>' +
-        '</button></div>';
-      if (!list.length) return head + '<div class="mine-sub" style="padding:2px 10px 10px">先在书库里导入或新建一本。</div>';
-      if (!open) return head;
-      return head + '<div class="menu-list fold-body">' + list.map((b) =>
-        '<button class="menu-item" data-book-edit="' + esc(b.id) + '">' +
-          '<span class="mi-ico">✎</span>' +
-          '<span><span>' + esc(b.name) + '</span><span class="mi-s">' +
-            (isBookEditable(b) ? '可以直接改正文（改了能还原）' : '只读：要先打开才能改') +
-          '</span></span>' +
-          '<span class="sw' + (isBookEditable(b) ? ' on' : '') + '"><i></i></span>' +
-        '</button>').join('') + '</div>';
-    })() +
-    '<h4>章节锁</h4>' +
+    '<h4>显示</h4>' +
     '<div class="menu-list">' +
-      '<button class="menu-item" data-ulock-toggle>' +
-        '<span class="mi-ico">' + (R.on ? '🔒' : '🔓') + '</span>' +
-        '<span><span>章节锁</span><span class="mi-s">' +
-          (R.on ? '上一章没达标，下一章就锁着' : '关着：想读哪章读哪章') +
-        '</span></span>' +
-        '<span class="sw' + (R.on ? ' on' : '') + '"><i></i></span>' +
-      '</button>' +
+      row('💧', '正文水印　' + (wmText() || '（还没写内容）'), 'data-wm-edit') +
+      row('✍️', '顶栏右上角　' + (creditTag() || '（空着）'), 'data-credit-tag-edit') +
     '</div>' +
     '<h4>数据</h4>' +
     '<div class="menu-list">' +
-      '<button class="menu-item" data-set="backup"><span class="mi-ico">↓</span><span><span>备份全部数据</span><span class="mi-s">JSON，可以再导入回来</span></span></button>' +
-      '<button class="menu-item" data-set="restore"><span class="mi-ico">↑</span><span><span>导入备份</span><span class="mi-s">合并到现在的数据里</span></span></button>' +
+      '<button class="menu-item" data-set="backup"><span class="mi-ico">↓</span><span class="mi-l">备份全部数据</span></button>' +
+      '<button class="menu-item" data-set="restore"><span class="mi-ico">↑</span><span class="mi-l">导入备份</span></button>' +
     '</div>' +
-    '<h4 style="color:var(--danger)">危险操作</h4>' +
+    '<h4>危险操作</h4>' +
     '<div class="menu-list">' +
-      '<button class="menu-item danger" data-set="wipe"><span class="mi-ico">✕</span><span><span>清空这台设备上的数据</span><span class="mi-s">书、批注、统计全没了，撤不回来</span></span></button>' +
+      '<button class="menu-item danger" data-set="wipe"><span class="mi-ico">✕</span><span class="mi-l">清空这台设备上的数据</span></button>' +
     '</div>' +
     '<h4>关于</h4>' +
     '<p style="font-size:12.5px;color:var(--muted);line-height:1.75">所有内容都存在这台设备的浏览器里，不上传任何服务器。' +
@@ -4551,6 +5207,13 @@ function openSettingsSheet() {
   const sh = openSheet('设置', settingsBodyHTML());
   const body = $('.sheet-body', sh.el);
   const refresh = () => { body.innerHTML = settingsBodyHTML(); };
+  window.refreshSettings = refresh;      // 别处改完设置也能刷新这一页
+  sh.el.addEventListener('input', (ev) => {
+    const wt = ev.target.closest('[data-wm-text]');
+    if (!wt) return;
+    wmCfg().text = wt.value;
+    save(); renderWatermark();
+  });
   sh.el.addEventListener('click', (ev) => {
     const t = ev.target.closest('[data-theme]');
     if (t) { store.ui.theme = t.dataset.theme; applyTheme(); save();
@@ -4565,10 +5228,11 @@ function openSettingsSheet() {
       save(); refresh();
       return;
     }
-    const be = ev.target.closest('[data-book-edit]');
-    if (be) {
-      const b = BOOKS.find((x) => x.id === be.dataset.bookEdit);
-      if (!b) return;
+    /* 改正文：只管现在在读的这一本 */
+    const et = ev.target.closest('[data-edit-toggle]');
+    if (et) {
+      const b = curBook();
+      if (!b || b.builtin) { toast('内置那本随时能改写，不用开关', 'err'); return; }
       store.ui.edit = store.ui.edit || {};
       if (store.ui.edit[b.id]) delete store.ui.edit[b.id];
       else store.ui.edit[b.id] = true;
@@ -4577,8 +5241,8 @@ function openSettingsSheet() {
       ttsUI();
       /* 正文里的「改写这段 / 改写这一章」跟着开关立即显隐，
          不用退出这本书再进一次 */
-      if (S.mode === 'read' && curBook() && curBook().id === b.id) render(true);
-      toast(store.ui.edit[b.id] ? '《' + b.name + '》现在可以直接改正文了' : '《' + b.name + '》改回只读');
+      if (S.mode === 'read') render(true);
+      toast(store.ui.edit[b.id] ? ('《' + b.name + '》现在可以直接改正文了') : ('《' + b.name + '》改回只读'));
       return;
     }
     const cont = ev.target.closest('[data-tts-cont]');
@@ -4599,6 +5263,18 @@ function openSettingsSheet() {
       save();
       toast(store.ui.unlock.on !== false ? '章节锁：开' : '章节锁：关，想读哪章读哪章');
       refresh(); ttsUI(); rerenderSide();
+      return;
+    }
+    const ct = ev.target.closest('[data-credit-tag-edit]');
+    if (ct) { openCreditTagSheet(); return; }
+    const wt = ev.target.closest('[data-wm-edit]');
+    if (wt) { openWatermarkSheet(); return; }
+    const wn = ev.target.closest('[data-wm-name]');
+    if (wn) {
+      const w = wmCfg();
+      w.text = String(store.ui.name || '').trim();
+      save(); refresh(); renderWatermark();
+      toast(w.text ? ('水印内容：' + w.text) : '还没设账户名，水印会是空的');
       return;
     }
     const st = ev.target.closest('[data-set]');
@@ -4623,8 +5299,28 @@ function openSettingsSheet() {
 }
 
 /* ---------- 渲染总入口 ---------- */
+/* ---------- 滚动复位：按「视口里最上面那条」算，不按像素 ----------
+   以前重画完直接 scrollTo(0, y)：可 DOM 换过以后，同样的 y 落在不同的句子上；
+   划线/高亮改了字重更是直接改了行宽——文字看着就跳了一下。
+   现在记住那条卡片，重画后把它放回原来的位置，视线里的字一动不动。 */
+function captureAnchor() {
+  for (const c of $$('#main .card')) {
+    const r = c.getBoundingClientRect();
+    if (r.bottom > 60) return { id: c.dataset.id, top: r.top };
+  }
+  return null;
+}
+function restoreAnchor(a) {
+  if (!a) return false;
+  const el = document.getElementById('e-' + a.id);
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  window.scrollTo(0, Math.round(r.top + window.scrollY - a.top));
+  return true;
+}
 function render(keepScroll) {
   const y = keepScroll ? window.scrollY : 0;
+  const anchor = keepScroll ? captureAnchor() : null;
   renderCredit();
   renderSide();
   if (S.mode === 'read') { renderRead(); startReadTimer(); startDwellTimer(); }
@@ -4638,7 +5334,9 @@ function render(keepScroll) {
     /* 朗读是条背景音：去检索、标签、「我的」都接着念，
        播放条跟着走（「我的」那页藏起来），回正文自动对位。 */
   }
-  if (keepScroll) window.scrollTo(0, y);
+  if (keepScroll) {
+    if (!(anchor && restoreAnchor(anchor))) window.scrollTo(0, y);
+  }
   $$('#tabbar .tab').forEach((b) => b.classList.toggle('on',
     b.dataset.go === S.mode || (b.dataset.go === 'toc' && (S.mode === 'find' || S.mode === 'tags'))));
   // 「随机一条」是给条目制的，别的书没有条目，就没有这一项
@@ -4646,6 +5344,7 @@ function render(keepScroll) {
   if (rnd) rnd.hidden = !curBook().builtin;
   closeMenu();
   ttsBarUpdate();          // 换页面了，播放条跟着显隐
+  renderWatermark();       // 水印跟着正文走
 }
 const rerenderSide = () => { renderSide(); };
 
@@ -4686,13 +5385,14 @@ function openSheet(title, bodyHTML, opts) {
   const bd = document.createElement('div');
   bd.className = 'sheet-backdrop';
   const sh = document.createElement('div');
-  sh.className = 'sheet';
+  sh.className = 'sheet' + (opts.bar ? ' with-bar' : '');
   sh.setAttribute('role', 'dialog');
   sh.setAttribute('aria-modal', 'true');
   sh.innerHTML = '<div class="sheet-head' + (opts.actions ? ' with-actions' : '') + '"><div class="sheet-title">' + title + '</div>' +
     '<button class="icon-btn" data-sheet-close aria-label="关闭"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>' +
     (opts.actions ? '<div class="sheet-head-acts">' + opts.actions + '</div>' : '') + '</div>' +
-    '<div class="sheet-body">' + bodyHTML + '</div>';
+    '<div class="sheet-body">' + bodyHTML + '</div>' +
+    (opts.bar ? '<div class="sheet-bar">' + opts.bar + '</div>' : '');
   layer.appendChild(bd); layer.appendChild(sh);
   const close = () => { bd.remove(); sh.remove(); document.removeEventListener('keydown', onKey); if (opts.onClose) opts.onClose(); };
   const onKey = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } };
@@ -4745,14 +5445,19 @@ function openEditSheet(id) {
   const f = cur ? Object.assign({}, e.f, cur.f) : Object.assign({}, e.f);
   const body =
     '<h4>标题</h4><textarea class="edit-area" data-fld="title" rows="2">' + esc(cur && cur.title ? cur.title : e.title) + '</textarea>' +
-    FIELDS.map((k) => '<h4>' + k + '</h4><textarea class="edit-area" data-fld="' + k + '" rows="' + (k === '来源' ? 4 : 3) + '">' + esc(f[k] || '') + '</textarea>').join('') +
+    FIELDS.map((k) => k === '说人话'
+      ? '<h4>说人话</h4>' +
+        '<div class="rich-edit" contenteditable="true" spellcheck="false" data-rich data-fld="说人话" style="min-height:200px">' + richEditorHTML(f[k] || '') + '</div>'
+      : '<h4>' + k + '</h4><textarea class="edit-area" data-fld="' + k + '" rows="' + (k === '来源' ? 4 : 3) + '">' + esc(f[k] || '') + '</textarea>').join('') +
     (cur ? '<div class="edit-bar" style="margin-top:16px"><button class="btn btn-sm" data-revert>还原成原文</button></div>' : '');
   const sh = openSheet('改写第 ' + e.n + ' 条', body,
     { actions: '<button class="btn btn-primary btn-sm" data-save>保存改写</button>' +
-               '<button class="btn btn-sm" data-sheet-close>取消</button>' });
+               '<button class="btn btn-sm" data-sheet-close>取消</button>',
+      bar: richBarHTML() });
+  richBind(sh);
   sh.el.addEventListener('click', (ev) => {
     if (ev.target.closest('[data-save]')) {
-      const get = (k) => { const t = sh.el.querySelector('[data-fld="' + k + '"]'); return t ? t.value.trim() : ''; };
+      const get = (k) => richValue(sh, k).trim();
       const title = get('title');
       const of = {};
       for (const k of FIELDS) { const v = get(k); if (v !== (e.f[k] || '')) of[k] = v; }
@@ -5047,10 +5752,10 @@ function entryText(id) {
   let t;
   if (e.plainCard) {
     // 导入的书：署名是它自己的名字，不是《高性价比人生指南》
-    t = '《' + name + '》' + (c ? ' · ' + c.title : '') + '\n\n' + (v.f['说人话'] || '') + '\n';
+    t = '《' + name + '》' + (c ? ' · ' + c.title : '') + '\n\n' + paraBasis(v.f['说人话'] || '') + '\n';
   } else {
     t = (c && !c.custom ? '第 ' + c.num + ' 章 ' + c.title : '我加的条目') + ' 第 ' + e.n + ' 条\n' + v.title + '\n\n';
-    if (v.f['说人话']) t += v.f['说人话'] + '\n';
+    if (v.f['说人话']) t += paraBasis(v.f['说人话']) + '\n';
     if (v.f['成本']) t += '成本：' + v.f['成本'] + '\n';
     if (v.f['收益']) t += '收益：' + v.f['收益'] + '\n';
   }
@@ -5154,7 +5859,7 @@ function exportNotes() {
       if (store.ent[e.id] && store.ent[e.id].t) tags.push(isDone(e.id) ? '☑已做到' : '☐待做到');
       const head = bk.builtin ? (e.n + '. ' + v.title) : (v.f['说人话'] || '').split('\n')[0].slice(0, 40);
       L.push('### ' + head + (tags.length ? '　`' + tags.join('` `') + '`' : ''));
-      if (v.f['说人话']) L.push('> ' + v.f['说人话'].split('\n')[0]);
+      if (v.f['说人话']) L.push('> ' + paraBasis(v.f['说人话']).split('\n')[0]);
       for (const a of annosOf(e.id)) L.push('- 批注（就着「' + a.t + '」）：' + a.b);
       for (const m of marksOf(e.id)) L.push('- 划线：「' + m.t + '」');
       const n = noteOf(e.id);
@@ -5181,7 +5886,7 @@ function exportBook() {
       L.push('### ' + c.num + '.' + e.n + ' ' + v.title);
       L.push('<!-- 成本标签: ' + ['钱', '时间', '毅力', '收益', '口径'].map((d) => d + '=' + (v.tags[d] || '')).join(' ') + ' -->');
       // 说人话里把批注插回原位：紧跟在被标的那句后面
-      for (const k of FIELDS) if (v.f[k]) L.push('- ' + k + '：' + (k === '说人话' ? inlineAnnos(v.f[k], annosOf(e.id)) : v.f[k]));
+      for (const k of FIELDS) if (v.f[k]) L.push('- ' + k + '：' + (k === '说人话' ? richToMarkdown(inlineAnnos(v.f[k], annosOf(e.id))) : v.f[k]));
       for (const a of annosOf(e.id)) L.push('- 我的批注（就着「' + a.t + '」）：' + a.b);
       for (const m of marksOf(e.id)) L.push('- 我的划线：' + m.t);
       const n = noteOf(e.id);
@@ -5202,19 +5907,23 @@ function exportBook() {
   dl('lifebook-full-' + stamp() + '.md', L.join('\n'));
 }
 
-/* 导入的书导出成 txt：原文照旧，批注紧跟在被标的那句后面 */
-function exportBookText(b) {
+/* 导入的书导出：md（样式留得住）或纯文本。
+   内部标记 {size=1.3} 这种绝不能出现在导出的文件里——
+   导出的是「读者看到的样子」。 */
+function exportBookText(b, md) {
   const L = [];
-  L.push('《' + b.name + '》（我的批注版）', '');
+  L.push(md ? ('# 《' + b.name + '》（我的批注版）') : ('《' + b.name + '》（我的批注版）'), '');
   L.push('导出日期：' + stamp(), '');
   const annos = [], marks = [];
   const chs = b.chapters || [];
   for (let ci = 0; ci < chs.length; ci++) {
-    L.push(chs[ci] || ('第 ' + (ci + 1) + ' 章'), '');
+    const ct = chs[ci] || ('第 ' + (ci + 1) + ' 章');
+    L.push(md ? ('## ' + ct) : ct, '');
     const items = (b.entries || []).filter((e) => e.chIdx === ci);
     for (const e of items) {
       const la = annosOf(e.id);
-      L.push(inlineAnnos(view(e).f['说人话'] || '', la), '');   // 导出的要是改写后的正文
+      const body = inlineAnnos(view(e).f['说人话'] || '', la);   // 导出的要是改写后的正文
+      L.push(md ? richToMarkdown(body) : paraBasis(body), '');
       for (const a of la) annos.push({ a: a, ci: ci });
       for (const m of marksOf(e.id)) marks.push({ m: m, ci: ci });
     }
@@ -5230,14 +5939,21 @@ function exportBookText(b) {
     L.push('');
   }
   L.push('——', '批注只存在你这台设备上。');
-  dl(safeName(b.name) + '-批注版-' + stamp() + '.txt', L.join('\n'), 'text/plain;charset=utf-8');
+  dl(safeName(b.name) + '-批注版-' + stamp() + (md ? '.md' : '.txt'), L.join('\n'),
+     md ? 'text/markdown;charset=utf-8' : 'text/plain;charset=utf-8');
 }
 
 /* 导出「现在在读的这一本」 */
 function exportCurrentBook() {
   const bk = curBook();
   if (bk.builtin) return exportBook();
-  return exportBookText(bk);
+  return exportBookText(bk, true);
+}
+/* 同一本书，导出成干净的纯文本 */
+function exportCurrentBookText() {
+  const bk = curBook();
+  if (bk.builtin) return exportBook();
+  return exportBookText(bk, false);
 }
 
 function exportJSON() {
@@ -5347,7 +6063,7 @@ function gotoBook(id) {
     return;
   }
   savePos();
-  ttsStop();
+  ttsStop(true);            // 换一本书不等于停：连续朗读的设置留着
   TTS.list = []; TTS.idx = 0;
   S_BOOK = id;
   store.ui.book = id; save();
@@ -5834,7 +6550,8 @@ function ttsEnsurePill() {
   pill.className = 'tts-pill';
   pill.hidden = true;
   pill.title = '展开朗读条';
-  pill.innerHTML = '<span class="tp-ico">' + ICON.speaker + '</span><span class="tp-txt">读进去</span><span class="tp-num">0%</span>' +
+  /* 就一个喇叭：读进去了没有、读到哪了，点开就知道 */
+  pill.innerHTML = '<span class="tp-ico">' + ICON.speaker + '</span>' +
     '<i class="tp-bar" style="width:0%"></i>';
   pill.addEventListener('click', () => { TTS.open = true; ttsBarUpdate(); });
   document.body.appendChild(pill);
@@ -6077,6 +6794,7 @@ function ttsStop(keepPlan) {
   // ✕ 是「全停」：定时也一起取消，别留个半截的设置在那儿
   if (!keepPlan && TTS.plan && TTS.plan.on) {
     TTS.plan.on = false;
+    store.ui.tts.cont = false;      // 用户自己按了停：偏好也跟着关
     save();
     toast('停了，定时也取消了');
   }
@@ -6471,17 +7189,8 @@ function ttsUI() {
       const ch = resolveChapter(S.ch);
       if ((ch.items || []).length) pct = Math.round(chStat(b, ch).timePct * 100);
     }
-    const num = pill.querySelector('.tp-num');
     const bar2 = pill.querySelector('.tp-bar');
-    const txt = pill.querySelector('.tp-txt');
-    if (num) num.textContent = pct + '%';
     if (bar2) bar2.style.width = clamp(pct, 0, 100) + '%';
-    /* 小圆钮上带着当下念到的这句：续读的锚点，念到哪句看得见 */
-    if (txt) {
-      txt.textContent = TTS.cur && TTS.cur.text
-        ? TTS.cur.text.slice(0, 16) + '…'
-        : (TTS.playing ? '正在念…' : '读进去');
-    }
     const ico = pill.querySelector('.tp-ico');
     if (ico) ico.innerHTML = TTS.mute ? '🔇' : ICON.speaker;
     pill.title = TTS.playing
@@ -6966,7 +7675,7 @@ function bind() {
     if (bmore) { openBookMenu(bmore.dataset.bookMore); return; }
 
     // 我的
-    if (t.closest('[data-open-settings]')) { openSettingsSheet(); return; }
+    if (t.closest('[data-io-sheet]')) { openIOSheet(); return; }
     if (t.closest('[data-set-name]')) { openNameSheet(); return; }
     if (t.closest('[data-share-stats]')) { shareStatsImage(); return; }
     const statb = t.closest('[data-stat]');
@@ -7008,10 +7717,12 @@ function bind() {
       const card = exp.closest('.card');
       if (card.classList.contains('open')) {          // 再点一次收回去
         card.classList.remove('open');
+        rec(card.dataset.id).open = 0;
         $('.cx-t', exp).textContent = card.classList.contains('slim') ? '展开' : '看成本、证据和来源';
         return;
       }
       card.classList.add('open');
+      rec(card.dataset.id).open = 1;
       $('.cx-t', exp).textContent = '收起';
       exp.querySelector('svg').style.transform = 'rotate(180deg)';
       rec(card.dataset.id).r = 1;
@@ -7063,8 +7774,14 @@ function bind() {
       return;
     }
     if (go === 'mine') { closeDrawer(); savePos(); S.mode = 'mine'; render(); window.scrollTo({ top: 0, behavior: 'instant' }); }
+    if (go === 'settings') { closeDrawer(); openSettingsSheet(); return; }
   });
   window.addEventListener('scroll', onScrollSave, { passive: true });
+
+  // 顶部右上角那一块：点一下改「这里显示什么」
+  $('#credit').addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-credit-tag]')) { openCreditTagSheet(); return; }
+  });
 
   // 选中文本 → 浮出工具条
   SELBAR.addEventListener('click', (ev) => {
@@ -7193,13 +7910,12 @@ function handleAct(act) {
     // 章节末的「速览长图」不在 .card 里，取不到条目 id，从 data-ch 拿章号
     if (kind === 'digest') { openDigestSheet(act.dataset.ch || S.ch); return; }
     if (kind === 'add-custom') { openAddSheet(S.ch); return; }
-    if (kind === 'tts-start') { ttsStart(); return; }
     if (kind === 'edit-chapter') { openEditChapterSheet(S.ch); return; }
-    if (kind === 'speak') { ttsStart(); return; }
     if (kind === 'tts-voice') { ttsOpenSettings(); return; }
     if (kind === 'tts-script') { ttsOpenScript(); return; }
     if (kind === 'dl-notes') return exportNotes();
     if (kind === 'dl-book') return exportCurrentBook();
+    if (kind === 'dl-book-txt') return exportCurrentBookText();
     if (kind === 'dl-json') return exportJSON();
     if (kind === 'up-json') return importJSON();
     if (kind === 'print') return window.print();
@@ -7243,7 +7959,7 @@ function handleAct(act) {
     }
     case 'share-anno': {
       const found = annoById(act.dataset.id);
-      if (found) openCardSheet(found.a.b, found.eid, found.a.t);   // 主体是写的话，原句放在下面当上下文
+      if (found) openAnnoShareSheet(found.a, found.eid);   // 批注有自己的样子：气泡 + 尖角 + 原文
       return;
     }
     case 'del-lost': {
@@ -7373,7 +8089,9 @@ function annoPopToggle(chip) {
   if (!p.hidden && p.dataset.forId === chip.dataset.anno) { annoPopHide(); return; }
   const txt = chip.dataset.annoB || '';
   if (!txt.trim()) { toast('这条批注是空的', 'err'); return; }
-  p.textContent = txt;
+  p.innerHTML = '<span class="anno-pop-t"></span>';
+  const tw = p.querySelector('.anno-pop-t');
+  if (tw) tw.textContent = txt;
   p.dataset.forId = chip.dataset.anno || '';
   p.hidden = false;
   annoPopPlace(chip);
@@ -7396,6 +8114,8 @@ document.addEventListener('click', (ev) => {
 }, true);
 window.addEventListener('scroll', annoPopMove, true);
 window.addEventListener('resize', annoPopMove);
+/* 气泡里不再放分享按钮：点被批注的那几个字，工具条里就有「分享」，
+   气泡只管显示那句话，不挡着正文。 */
 /* 点气泡里的字：收起气泡，弹出那条批注的工具条 */
 document.addEventListener('click', (ev) => {
   if (!ev.target.closest) return;
@@ -7437,8 +8157,9 @@ function showMarkBar(el, sel) {
       })()
     : [['copy', '复制', '复制这条批注'], ['share', '分享', '做成书摘分享'],
        ['mark', '划线', '把这段也划一道'], ['edit', '编辑', '改这条批注'], ['del', '取消', '取消这条批注']];
-  MARKBAR.innerHTML = acts.map((a) =>
-    '<button data-mk-act="' + a[0] + '" title="' + a[2] + '"><span>' + a[1] + '</span></button>').join('');
+  MARKBAR.innerHTML = '<button class="mb-close" data-mb-close aria-label="关闭" title="关掉">✕</button>' +
+    '<div class="mb-acts">' + acts.map((a) =>
+      '<button data-mk-act="' + a[0] + '" title="' + a[2] + '"><span>' + a[1] + '</span></button>').join('') + '</div>';
   MARKBAR.hidden = false;
   if (!el) return;
   el.classList.add('sel');
@@ -7477,6 +8198,7 @@ function pickMark(el, kind) {
   showMarkBar(el, cur);
 }
 MARKBAR.addEventListener('click', (ev) => {
+  if (ev.target.closest('[data-mb-close]')) { hideMarkBar(); return; }
   const b = ev.target.closest('[data-mk-act]');
   if (!b || !SEL_MK) return;
   const act = b.dataset.mkAct;
@@ -7513,7 +8235,7 @@ MARKBAR.addEventListener('click', (ev) => {
   if (!found) return hideMarkBar();
   const a = found.a, eid = found.eid;
   if (act === 'copy') { copyText(a.b, '已复制'); return; }
-  if (act === 'share') { hideMarkBar(); openCardSheet(a.b, eid, a.t); return; }
+  if (act === 'share') { hideMarkBar(); openAnnoShareSheet(a, eid); return; }
   if (act === 'mark') {
     // 批注过的地方也能划线：已经划过就把那道撤了，没划过就补一道
     const exist = store.marks.find((x) => x.eid === eid && x.t === a.t);
@@ -8838,6 +9560,182 @@ function openCardSheet(text, eid, sub, segs) {
   });
 }
 
+/* ---------- 批注的分享图 ----------
+   批注不是书摘：书摘是「摘下来的那句话」，批注是「我写的那句 + 它挂在哪儿」。
+   所以图做成正文里那个气泡的样子：
+   上面一个深色框写我写的话，底下带尖角指着原文，
+   被批的那几个字亮出来，后面跟一个「批」字徽标。 */
+function annoRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+/* 一行正文：被批的那几个字染成墨绿、垫一层淡底，最后跟一个「批」字徽标 */
+function drawAnnoLine(ctx, ln, qS, qE, fs, fontBase, tx, y) {
+  if (!ln.chars || !ln.chars.length) return;
+  const segs = [];
+  for (const pair of ln.chars) {
+    const i = pair[0], ch = pair[1];
+    const inQ = qS >= 0 && i >= qS && i < qE;
+    const key = inQ ? 'q' : 'p';
+    let cur = segs[segs.length - 1];
+    if (!cur || cur.key !== key) { cur = { key: key, str: '', end: i }; segs.push(cur); }
+    cur.str += ch;
+    cur.end = i + 1;
+  }
+  let x = tx;
+  let badge = null;
+  ctx.textAlign = 'left';
+  for (const s of segs) {
+    ctx.font = fs + 'px ' + fontBase;
+    const w = ctx.measureText(s.str).width;
+    if (s.key === 'q') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(31,107,92,0.13)';
+      ctx.fillRect(x - 3, y - fs * 0.86, w + 6, fs * 1.18);
+      ctx.restore();
+      ctx.fillStyle = '#1F6B5C';
+      ctx.fillText(s.str, x, y);
+      x += w;
+      if (s.end >= qE) {                    // 徽标只在这几个字后面出现一次
+        const r = fs * 0.56;
+        const bx = x + r * 1.15, by = y - fs * 0.30;
+        ctx.fillStyle = '#E07B2C';
+        ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold ' + Math.round(r * 1.25) + 'px ' + fontBase;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('批', bx, by + 1);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        x = bx + r + 8;
+        badge = { bx: bx, by: by, r: r };
+      }
+      continue;
+    }
+    ctx.fillStyle = '#2C2822';
+    ctx.fillText(s.str, x, y);
+    x += w;
+  }
+  return badge;
+}
+function drawAnnoCard(note, quote, eid) {
+  const W = 1440, H = 1080, PAD = 110;
+  const SERIF = '"Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif';
+  const SANS = '-apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif';
+  const cv = document.createElement('canvas');
+  const ctx = cv.getContext('2d');
+  cv.width = W * 2; cv.height = H * 2;
+  ctx.scale(2, 2);
+  ctx.textBaseline = 'alphabetic';
+
+  const e = BY_ID.get(eid);
+  const c = entryChapter(e);
+  const bookName = bookNameOf(e);
+  const where = c ? (c.custom ? '我加的条目' : c.num + ' · ' + String(c.title || '').replace(/^#+\s*/, '')) : '';
+  const src = richPlain(((view(e) || {}).f['说人话'] || quote || '')).replace(/\s+/g, ' ').trim();
+  const q = richPlain(quote || '').replace(/\s+/g, ' ').trim();
+  const qS = q ? src.indexOf(q) : -1;
+  const qE = qS >= 0 ? qS + q.length : -1;
+
+  /* 纸底 */
+  ctx.fillStyle = '#F6F2E8';
+  ctx.fillRect(0, 0, W, H);
+
+  /* ---- 气泡：深底白字，写的是我写的那句话 ---- */
+  const nFS = 40, nLH = 62, nPad = 42;
+  ctx.font = nFS + 'px ' + SANS;
+  let nLines = wrapText(ctx, String(note || ''), W - PAD * 2 - nPad * 2);
+  if (!nLines.length) nLines = [''];
+  if (nLines.length > 5) { nLines = nLines.slice(0, 5); nLines[4] = nLines[4].slice(0, -1) + '…'; }
+  const bH = nLines.length * nLH + nPad * 2 - 10;
+  const bX = PAD, bY = 170, bW = W - PAD * 2;
+  ctx.fillStyle = '#2B2C31';
+  annoRoundRect(ctx, bX, bY, bW, bH, 34);
+  ctx.fill();
+  /* 气泡里的字 */
+  ctx.fillStyle = '#F4F3F0';
+  ctx.font = nFS + 'px ' + SANS;
+  ctx.textAlign = 'left';
+  let ny = bY + nPad + nFS * 0.85;
+  for (const ln of nLines) { ctx.fillText(ln, bX + nPad, ny); ny += nLH; }
+
+  /* ---- 原文：被批的那几个字亮出来，后面跟「批」字徽标 ---- */
+  const tTop = bY + bH + 28 + 86;
+  const tFS = 40, tLH = 68;
+  ctx.font = tFS + 'px ' + SERIF;
+  let lines = wrapTextIdx(ctx, src, W - PAD * 2);
+  const maxL = Math.max(1, Math.floor((H - tTop - 190) / tLH));
+  if (lines.length > maxL) {
+    lines = lines.slice(0, maxL);
+    const last = lines[lines.length - 1];
+    if (last && last.str && last.str.length > 1) { last.str = last.str.slice(0, -1) + '…'; last.chars = last.chars.slice(0, -1); }
+  }
+  let ty = tTop + tFS * 0.9;
+  let badge = null;
+  for (const ln of lines) {
+    const b2 = drawAnnoLine(ctx, ln, qS, qE, tFS, SERIF, PAD, ty);
+    if (b2) badge = b2;
+    ty += tLH;
+  }
+  /* 尖角：正对着下面那个「批」字徽标 */
+  if (badge) {
+    ctx.fillStyle = '#2B2C31';
+    ctx.beginPath();
+    ctx.moveTo(badge.bx - 24, bY + bH - 2);
+    ctx.lineTo(badge.bx + 24, bY + bH - 2);
+    ctx.lineTo(badge.bx, badge.by - badge.r - 10);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  /* ---- 落款：书名、章节、账户名 ---- */
+  const name = (store.ui.name || '').trim();
+  ctx.font = '28px ' + SANS;
+  ctx.fillStyle = '#9A9286';
+  ctx.textAlign = 'left';
+  ctx.fillText('《' + bookName + '》' + (where ? ' · ' + where : ''), PAD, H - 100);
+  if (name) { ctx.textAlign = 'right'; ctx.fillText(name, W - PAD, H - 100); ctx.textAlign = 'left'; }
+  return cv;
+}
+/* 分享一条批注 */
+function openAnnoShareSheet(a, eid) {
+  const cv = drawAnnoCard(a.b, a.t, eid);
+  const dataURL = cv.toDataURL('image/png');
+  const asFile = () => new Promise((res) => cv.toBlob((b) => res(new File([b], 'lifebook-anno.png', { type: 'image/png' })), 'image/png'));
+  const sh = openSheet('分享批注', '<p style="font-size:12.5px;color:var(--muted)">存成图片，可以直接发到聊天窗口。</p>' +
+    '<img id="anno-img" src="' + dataURL + '" alt="批注卡片预览" style="display:block;margin:0 auto;max-width:min(100%,300px);max-height:44vh;object-fit:contain;border-radius:10px;border:1px solid var(--border);background:var(--bg-sunken)">' +
+    '<div class="edit-bar" style="margin-top:14px">' +
+    '<button class="btn btn-primary" data-save><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></svg>分享图片</button>' +
+    '<button class="btn" data-dl>保存到本地</button></div>');
+  sh.el.addEventListener('click', async (ev) => {
+    if (ev.target.closest('[data-save]')) {
+      try {
+        const file = await asFile();
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: '批注' });
+          sh.close();
+        } else {
+          const el = document.createElement('a');
+          el.href = dataURL; el.download = 'lifebook-anno.png';
+          document.body.appendChild(el); el.click(); el.remove();
+          toast('这个浏览器不能直接分享，已存成图片');
+        }
+      } catch (e) { if (e && e.name !== 'AbortError') toast('分享没成功：' + e.message, 'err'); }
+      return;
+    }
+    if (ev.target.closest('[data-dl]')) {
+      const el = document.createElement('a');
+      el.href = dataURL; el.download = 'lifebook-anno.png';
+      document.body.appendChild(el); el.click(); el.remove();
+      toast('已保存 lifebook-anno.png · 在「文件/下载」里找；要进相册请走系统分享');
+    }
+  });
+}
+
 /* ---------- 各类说明面板 ---------- */
 function openThemeSheet() {
   const sh = openSheet('背景色与字号', '<p>按你的环境挑一个。长夜里读，深色更省眼。</p>' +
@@ -8884,7 +9782,8 @@ function openIOSheet() {
   const bk = curBook();
   const sh = openSheet('导入 / 导出', '<p>你的批注只存在这台设备上。换设备、备份、或者分享给别人，用下面的导出。</p>' +
     '<div class="io-grid">' +
-    ioBtn('dl-book', 'down', '导出这本书', bk.builtin ? '《' + D.meta.title + '》Markdown，笔记内嵌' : '《' + bk.name + '》txt，批注内嵌') +
+    ioBtn('dl-book', 'down', '导出这本书', bk.builtin ? '《' + D.meta.title + '》Markdown，笔记内嵌' : '《' + bk.name + '》Markdown，样式和批注都在') +
+    ioBtn('dl-book-txt', 'down', '导出纯文本', '《' + bk.name + '》txt，只要字，不要任何标记') +
     ioBtn('dl-notes', 'down', '导出我的批注', 'Markdown，只含《' + bk.name + '》的') +
     ioBtn('dl-json', 'down', '备份全部数据', 'JSON，可再导入') +
     ioBtn('up-json', 'up', '导入备份', '合并到当前数据') +
@@ -8895,6 +9794,7 @@ function openIOSheet() {
     const k = b.dataset.act;
     if (k === 'dl-notes') exportNotes();
     else if (k === 'dl-book') exportBook();
+    else if (k === 'dl-book-txt') exportCurrentBookText();
     else if (k === 'dl-json') exportJSON();
     else if (k === 'up-json') importJSON();
     if (k !== 'up-json') sh.close();
@@ -9058,6 +9958,7 @@ function storageBanner() {
 }
 
 async function boot() {
+  window.__toast = toast;      // 先挂上：启动中途出错也还能弹提示，而不是盖全屏页
   // 从后台回到前台：如果话没接着念，从这一句重念
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
@@ -9081,17 +9982,29 @@ async function boot() {
       }
     } catch (e) { /* 读不到就只用内置那本 */ }
   } else BOOKS = store.ui.builtinOff ? [] : [BUILTIN()];
+  /* IndexedDB 用不了的时候，书在退路里：也得读出来。
+     这一段要小心：退路里可能存着整本书（好几 MB），
+     以前每读一本书就把整包重新解析一遍，慢得能把启动拖死——
+     现在只解析一次。 */
+  const lsBooks = lsBookMap();
+  for (const k of Object.keys(lsBooks)) {
+    const b = lsBooks[k];
+    if (!b || !b.id) continue;
+    if (BOOKS.find((x) => x.id === b.id)) continue;
+    BOOKS.push(b);
+    if (b.hash) { store.bookIds = store.bookIds || {}; store.bookIds[b.hash] = b.id; }
+  }
   // 朗读的连续模式、停止点：上次设的还在（以前只存在内存里，一刷新就没）
   store.ui.tts = store.ui.tts || {};
   TTS.plan = Object.assign({ on: false, mode: 'forever', endCh: 0, until: 0 }, store.ui.tts.plan || {});
-  TTS.plan.on = store.ui.tts.cont === true;
+  TTS.plan.on = store.ui.tts.cont !== false;     // 连续朗读：默认开着
 
   scopeBookIds();     // 先把老书的段落 id 修好，别让批注串书
   registerBooks();    // 再登记进索引
   migrateThinks();    // 「想法」已经并进「批注」，老数据别丢
   // 以前能「按原页读」的书（PDF / 图片），原页功能已经去掉，统一按文字读
   for (const b of BOOKS) {
-    if (b.mode === 'page') { b.mode = 'text'; idbPut('books', b.id, b); }
+    if (b.mode === 'page') { b.mode = 'text'; putBook(b); }
   }
   if (!BOOKS.find((b) => b.id === store.ui.book)) store.ui.book = 'builtin';
   S_BOOK = store.ui.book;
@@ -9109,6 +10022,7 @@ async function boot() {
   else if (h === 'books') S.mode = 'books';
   if (h && h !== 'find' && h !== 'mine') onHash();
   else render();
+  window.__booted = true;      // 正文已经出来了：看门狗就别再盖失败页（慢手机常事）
   storageBanner();
   // 上次读到一半，这本书不该又从头开始
   if (!h && S.mode === 'read') {
@@ -9116,7 +10030,6 @@ async function boot() {
     if (y > 200) requestAnimationFrame(() => window.scrollTo(0, y));
   }
   window.__booted = true;      // 启动完成，看门狗据此放行
-  window.__toast = toast;      // 让全局错误处理也能弹提示，而不是盖全屏页
 }
 
 boot();
