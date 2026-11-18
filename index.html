@@ -2598,9 +2598,11 @@ function paraBasis(text) {
 function reanchorEntries(oldEids, newTexts) {
   let moved = 0, lost = 0;
   const bookOf = (eid) => String(eid || '').split(':')[0];
-  const findIn = (txt) => {
+  const findIn = (txt, near) => {
     for (const nt of newTexts) {
-      const r = basisSearch({ raw: paraBasis(nt.text) }, txt);
+      /* near：同一句话在书里出现好几遍时，挑离原来最近的那一处，
+         别让批注跳到别段去 */
+      const r = basisSearch({ raw: paraBasis(nt.text) }, txt, near);
       if (r) return { eid: nt.eid, o: r.s, l: r.e - r.s };
     }
     return null;
@@ -2614,7 +2616,15 @@ function reanchorEntries(oldEids, newTexts) {
     delete r.a;
   }
   for (const a of picked) {
-    const hit = findIn(a.t);
+    /* 先回它原来那一段的新版本里找：同样的字在书里出现两遍时
+       （比如原文一份、脂批一份），批注该跟着原来那段走 */
+    let hit = null;
+    const home = newTexts.find((nt) => nt.from && nt.from === a.eid);
+    if (home) {
+      const r = basisSearch({ raw: paraBasis(home.text) }, a.t);
+      if (r) hit = { eid: home.eid, o: r.s, l: r.e - r.s };
+    }
+    if (!hit) hit = findIn(a.t, a.o);
     if (hit) {
       a.eid = hit.eid; a.o = hit.o; a.l = hit.l; moved++;
       const r = rec(hit.eid);
@@ -2628,7 +2638,7 @@ function reanchorEntries(oldEids, newTexts) {
   /* 划线在 store.marks 里，改 eid 就行 */
   for (const m of store.marks) {
     if (!oldEids.has(m.eid)) continue;
-    const hit = findIn(m.t);
+    const hit = findIn(m.t, m.o);
     if (hit) { m.eid = hit.eid; m.o = hit.o; m.l = hit.l; moved++; }
     else {
       lost++;
@@ -2653,10 +2663,179 @@ function makePlainEntry(book, ci, pi, text) {
 
 /* ---------- 改正文：段落级 / 章节级 ---------- */
 /* 存一份改写，跟内嵌那本的「改写」一个套路：原文永远留着，能还原 */
+/* 编辑器在手机上会把字吃掉（选区替换的老毛病），
+   改完只剩原文的一截。认出这种「只剩一截」的情况，把丢掉的补回去。 */
+/* 按「去掉空白后的字数」在原文里切一刀，缩进和换行都留着 */
+function normSlice(text, nStart, nLen) {
+  const t = String(text || '');
+  let cnt = 0, i = 0;
+  while (i < t.length && cnt < nStart) { if (!/\s/.test(t[i])) cnt++; i++; }
+  const start = i;
+  while (i < t.length && cnt < nStart + nLen) { if (!/\s/.test(t[i])) cnt++; i++; }
+  return t.slice(start, i);
+}
+function restoreLostText(newText, oldText, strict) {
+  /* 比对要用「渲染后的纯文本」：带 {color} 标记的段落，
+     按原样比会找不到，也就不会触发补回。 */
+  const norm = (t) => paraBasis(t || '').replace(/\s+/g, '');
+  const a = norm(newText), b = norm(oldText);
+  if (!a || !b) return null;
+  if (a.length >= b.length - 20) return null;          // 没少（或少得不多）就不管
+  const p = b.indexOf(a);
+  if (p < 0) return null;                              // 不是原文中的一段，不乱动
+  const sufLen = b.length - p - a.length;
+  if (p + sufLen < 20) return null;                    // 少得不多，可能是故意删的
+  /* 严格模式：只有「就是开头」或「就是结尾」这两种吃法才算编辑器吃字。
+     中间少一块的，多半是人自己删的——补回来是把人删的字又塞回去。 */
+  if (strict && p !== 0 && p + a.length !== b.length) return null;
+  /* 切片按原文走，别把缩进和换行弄没了 */
+  let pre = normSlice(oldText, 0, p), suf = normSlice(oldText, p + a.length, sufLen);
+  if (norm(pre) !== b.slice(0, p) || norm(suf) !== b.slice(p + a.length)) {
+    pre = b.slice(0, p); suf = b.slice(p + a.length);
+  }
+  return { text: pre + String(newText || '').trim() + suf, lost: p + sufLen };
+}
+/* 改写整章时，新段落跟旧条目怎么配对？
+   关键分清两件完全不同的事：
+     「我把一段拆成几段」   —— 这是排版，���该照办
+     「编辑器把字吃了」     —— 这是故障，该补回来
+   以前两件事混在一起：只要新段落是旧段落的一截，
+   就当成编辑器吃字，把整段原文塞回去——
+   用户明明只是换了几行，段落却被打回原形，
+   剩下的碎片还被拆成一条条新条目，批注也跟着跑错地方。
+   现在按四种情况分开：
+     ① 一字不差            → 直接对上
+     ② 一段旧文被拆成几段  → 认成拆段，按新的分法排，不补原文
+     ③ 几段旧文并成一段    → 认成并段，位置留给原来那段
+     ④ 只剩一截、且是开头或结尾 → 才可能是编辑器吃字，补回来 */
+function pairChapterParas(oldPlain, newPlain) {
+  const pairNew = new Array(newPlain.length).fill(-1);   // 新段落 → 旧段落下标
+  const pairOld = new Array(oldPlain.length).fill(-1);   // 旧段落 → 新段落下标
+  const usedOld = new Set();
+  const truncate = new Set();     // 新段落：真的被吃了字，可以补回原文
+  const splitOf = new Map();      // 新段落 → { old, part, total }：被拆开的第几片
+  const claim = (i, j) => { pairNew[i] = j; pairOld[j] = i; usedOld.add(j); };
+
+  /* ① 一字不差 */
+  for (let i = 0; i < newPlain.length; i++) {
+    if (!newPlain[i]) continue;
+    for (let j = 0; j < oldPlain.length; j++) {
+      if (usedOld.has(j) || !oldPlain[j]) continue;
+      if (oldPlain[j] === newPlain[i]) { claim(i, j); break; }
+    }
+  }
+  /* ③ 并段：新的几段并成了一段（老的那几段算被并进来了） */
+  for (let i = 0; i < newPlain.length; i++) {
+    if (pairNew[i] >= 0 || !newPlain[i]) continue;
+    const inside = [];
+    for (let j = 0; j < oldPlain.length; j++) {
+      if (!oldPlain[j] || oldPlain[j].length < 8) continue;   // 太短的别乱认
+      if (newPlain[i].indexOf(oldPlain[j]) > -1) inside.push(j);
+    }
+    if (!inside.length) continue;
+    const first = inside.find((j) => !usedOld.has(j));
+    if (first == null) continue;
+    claim(i, first);
+    for (const j of inside) if (j !== first) usedOld.add(j);
+  }
+  /* ② 拆段 / ④ 吃字：看每段旧文里装着哪几个新段落 */
+  const inside = new Map();       // 旧段落下标 → 新段落下标[]
+  for (let i = 0; i < newPlain.length; i++) {
+    if (pairNew[i] >= 0 || !newPlain[i]) continue;
+    for (let j = 0; j < oldPlain.length; j++) {
+      if (usedOld.has(j) || !oldPlain[j]) continue;
+      if (oldPlain[j].indexOf(newPlain[i]) > -1) {
+        if (!inside.has(j)) inside.set(j, []);
+        inside.get(j).push(i);
+        break;
+      }
+    }
+  }
+  for (const [j, list] of inside) {
+    if (list.length >= 2) {
+      /* 拆段：一段旧文被拆成好几段。
+         这是你排的版，不是编辑器吃字——绝不能把原文塞回去。 */
+      const ordered = list.slice().sort((a, b) => a - b);
+      claim(ordered[0], j);
+      ordered.forEach((i, k) => {
+        if (k > 0) splitOf.set(i, { old: j, part: k, total: ordered.length });
+      });
+      continue;
+    }
+    /* 只有一片：可能是编辑器把字吃了。
+       但只有「就是开头」或「就是结尾」这两种吃法才补；
+       中间少一块，多半是你自己删的——补回来等于把你删的字塞回去。 */
+    const i = list[0];
+    const a = newPlain[i], b = oldPlain[j];
+    const p = b.indexOf(a);
+    if (p === 0 || p + a.length === b.length) truncate.add(i);
+  }
+  /* ⑤ 剩下的按「谁挨着谁」配：
+        已经对上的段落把整章切成一段一段，
+        剩下的只在各自那一段里找搭档——
+        不然后面的段落会抢了前面的条目，
+        批注、划线也跟着跑到隔壁去。 */
+  const anchors = [];
+  for (let i = 0; i < newPlain.length; i++) if (pairNew[i] >= 0) anchors.push(i);
+  const gapOfNew = (i) => { let g = 0; for (const a of anchors) if (a < i) g++; return g; };
+  const gapOfOld = (j) => { let g = 0; for (const a of anchors) if (pairOld[a] < j) g++; return g; };
+  const freeNew = [], freeOld = [];
+  /* 被拆开的碎片不算「没配上」：它们是老段落拆出来的，
+     身份已经算清楚了，别再给它们另找搭档 */
+  for (let i = 0; i < newPlain.length; i++) {
+    if (pairNew[i] < 0 && newPlain[i] && !splitOf.has(i)) freeNew.push(i);
+  }
+  for (let j = 0; j < oldPlain.length; j++) if (!usedOld.has(j) && oldPlain[j]) freeOld.push(j);
+  const byGapNew = new Map(), byGapOld = new Map();
+  for (const i of freeNew) {
+    const g = gapOfNew(i);
+    if (!byGapNew.has(g)) byGapNew.set(g, []);
+    byGapNew.get(g).push(i);
+  }
+  for (const j of freeOld) {
+    const g = gapOfOld(j);
+    if (!byGapOld.has(g)) byGapOld.set(g, []);
+    byGapOld.get(g).push(j);
+  }
+  for (const [g, list] of byGapNew) {
+    const olds = byGapOld.get(g) || [];
+    const n = Math.min(list.length, olds.length);
+    for (let k = 0; k < n; k++) claim(list[k], olds[k]);
+  }
+  return { pairNew: pairNew, pairOld: pairOld, truncate: truncate, splitOf: splitOf };
+}
+
+/* 改写过的段落，���原文也留一份。
+   备份里带着原文：① 改坏了能还原；② 换设备导入时能拿原文对回去，
+   不会只剩一截改写、看不出原来是什么。 */
+/* 导入/开机时自检：某条改写如果只是原文的一截，
+   说明当初是编辑器把字吃了（而不是用户自己删的）。
+   这种按原文补回来；本来就存着原文的（新版改写的）不动。 */
+function repairTruncatedEdits(book) {
+  const b = book || curBook();
+  if (!b || b.builtin) return 0;
+  let fixed = 0;
+  for (const e of (b.entries || [])) {
+    const r0 = store.ent[e.id];
+    if (!r0 || !r0.e || !r0.e.f) continue;
+    const edit = r0.e.f['说人话'];
+    if (!edit) continue;
+    if (r0.o) continue;                    // 有原文底子：用户自己改的，不动
+    const orig = e.f && e.f['说人话'];
+    if (!orig) continue;
+    const back = restoreLostText(edit, orig);
+    if (!back) continue;
+    r0.e.f['说人话'] = back.text;
+    r0.o = orig;                           // 原文留一份，以后能还原
+    fixed++;
+  }
+  return fixed;
+}
 function setEditedText(eid, text, orig) {
   const e = BY_ID.get(eid);
   if (!e) return;
   const r = rec(eid);
+  if (orig && !r.o) r.o = orig;          // 原文存一份（只存最初的原文）
   if (text === orig) {
     if (r.e) {
       delete r.e.f;
@@ -2841,6 +3020,62 @@ function richSelHtml(sel) {
   } catch (e) { return ''; }
 }
 /* 套格式：用浏览器自己的排版命令，改过的字不会越套越乱 */
+/* 给选中的字套一层样式。
+   以前用 document.execCommand('insertHTML')：手机上这个命令靠不住——
+   选区替换会把选中范围之外的内容也吃掉，还常复制一份出来，
+   用户的正文就这么少过一大段（开头没了、后半段重复）。
+   现在自己用 Range 把选区抠出来，放进新元素里再插回去。 */
+function richWrapSel(sel, tag, style) {
+  if (!sel || !sel.rangeCount) return false;
+  const r = sel.getRangeAt(0);
+  if (r.collapsed) return false;
+  const wrap = document.createElement(tag);
+  if (style) wrap.setAttribute('style', style);
+  try {
+    wrap.appendChild(r.extractContents());
+    r.insertNode(wrap);
+  } catch (e) { return false; }
+  const nr = document.createRange();
+  nr.selectNodeContents(wrap);
+  sel.removeAllRanges();
+  sel.addRange(nr);
+  return true;
+}
+/* 把选区所在的粗体拆开（取消加粗）。
+   要拆的是 <strong> 元素本身——光把选区里的内容抠出来，文字还在粗体里。 */
+function richUnbold(sel) {
+  const r = sel.getRangeAt(0);
+  const tn = r.startContainer.nodeType === 3 ? r.startContainer : null;
+  const el = tn ? tn.parentElement : r.startContainer;
+  const strong = el && el.closest ? el.closest('strong,b') : null;
+  if (!strong || !strong.parentNode) return false;
+  const parent = strong.parentNode;
+  while (strong.firstChild) parent.insertBefore(strong.firstChild, strong);
+  parent.removeChild(strong);
+  try {
+    const nr = document.createRange();
+    const target = tn && tn.parentNode ? tn : null;
+    if (target && target.nodeValue) {
+      nr.setStart(target, Math.min(r.startOffset, target.nodeValue.length));
+      nr.setEnd(target, Math.min(r.endOffset, target.nodeValue.length));
+    } else {
+      nr.selectNode(parent);
+    }
+    sel.removeAllRanges();
+    sel.addRange(nr);
+  } catch (e) {}
+  return true;
+}
+/* 选区是不是本来就是粗体？（是的话，这次点击是取消加粗） */
+function richSelAllBold(sel) {
+  const r = sel.getRangeAt(0);
+  const n = r.startContainer.nodeType === 3 ? r.startContainer.parentElement : r.startContainer;
+  if (!n || !n.getAttribute) return false;
+  try {
+    const w = String(window.getComputedStyle(n).fontWeight || '');
+    return w === 'bold' || w === 'bolder' || /^[5-9]00$/.test(w);
+  } catch (e) { return false; }
+}
 function richApply(sh, kind, val) {
   const ed = richTarget(sh);
   if (!ed) { toast('这里改不了格式', 'err'); return; }
@@ -2856,19 +3091,36 @@ function richApply(sh, kind, val) {
   }
   if (kind === 'bold') {
     if (!hasSel) return toast('先选中要加粗的字', 'err');
-    document.execCommand('bold');
+    /* 本来就是粗体：这次是取消加粗（跟以前一样能来回切） */
+    if (richSelAllBold(sel)) { richUnbold(sel); return; }
+    /* 加粗：把选中范围里的旧粗体解开，整体再套一层（别套成两层粗体）。
+       解开和套上要一次做完——分成两步会把选区弄丢，字反而加不上。 */
+    const r = sel.getRangeAt(0);
+    const frag = r.cloneContents();
+    const olds = Array.from(frag.querySelectorAll('strong,b'));
+    for (const el of olds) {
+      const p = el.parentNode;
+      while (el.firstChild) p.insertBefore(el.firstChild, el);
+      p.removeChild(el);
+    }
+    const strong = document.createElement('strong');
+    strong.appendChild(frag);
+    r.deleteContents();
+    r.insertNode(strong);
+    const nr = document.createRange();
+    nr.selectNodeContents(strong);
+    sel.removeAllRanges();
+    sel.addRange(nr);
     return;
   }
   if (kind === 'color') {
     if (!hasSel) return toast('先选中要改色的字', 'err');
-    document.execCommand('foreColor', false, val);
+    richWrapSel(sel, 'span', 'color:' + val);
     return;
   }
   if (kind === 'size') {
     if (!hasSel) return toast('先选中要改大小的字', 'err');
-    const html = richSelHtml(sel);
-    if (!html) return;
-    document.execCommand('insertHTML', false, '<span style="font-size:' + val + 'em">' + html + '</span>');
+    richWrapSel(sel, 'span', 'font-size:' + val + 'em');
     return;
   }
   const b = richBlock(ed);
@@ -2886,6 +3138,44 @@ function richApply(sh, kind, val) {
   }
 }
 /* 把工具条接到弹层上 */
+/* 回车自己拆段。
+   交给浏览器拆，它对含 <br> 的块处理得不好：手机上按回车，
+   块开头会被吞掉、后半段还会被复制一份。 */
+function richSplitBlock(ed) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  const rng = sel.getRangeAt(0);
+  const node = rng.startContainer;
+  const el = node.nodeType === 1 ? node : (node.parentElement || null);
+  const div = el && el.closest ? el.closest('div') : null;
+  if (!div || !ed.contains(div)) return false;
+  let head, tail;
+  try {
+    const r1 = document.createRange();
+    r1.setStart(div, 0);
+    r1.setEnd(rng.startContainer, rng.startOffset);
+    head = r1.cloneContents();
+    const r2 = document.createRange();
+    r2.setStart(rng.startContainer, rng.startOffset);
+    r2.setEnd(div, div.childNodes.length);
+    tail = r2.cloneContents();
+  } catch (e) { return false; }
+  const nd = document.createElement('div');
+  const st = div.getAttribute('style');
+  if (st) nd.setAttribute('style', st);
+  div.textContent = '';
+  div.appendChild(head);
+  nd.appendChild(tail);
+  if (div.parentNode) div.parentNode.insertBefore(nd, div.nextSibling);
+  try {
+    const nr = document.createRange();
+    nr.setStart(nd, 0);
+    nr.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(nr);
+  } catch (e) {}
+  return true;
+}
 function richBind(sh) {
   const head = $('.sheet-head', sh.el);
   const syncHead = () => {
@@ -2895,6 +3185,13 @@ function richBind(sh) {
   setTimeout(syncHead, 40);
   window.addEventListener('resize', syncHead);
   try { document.execCommand('styleWithCSS', false, true); } catch (e) {}
+  sh.el.addEventListener('keydown', (ev) => {
+    const t = ev.target && ev.target.closest ? ev.target.closest('[data-rich]') : null;
+    if (!t) return;
+    if (ev.key !== 'Enter' || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (ev.isComposing || ev.keyCode === 229) return;    // 正在打拼音，回车是确认，不是拆段
+    if (richSplitBlock(t)) ev.preventDefault();
+  });
   sh.el.addEventListener('focusin', (ev) => {
     const t = ev.target && ev.target.closest ? ev.target.closest('[data-rich]') : null;
     if (t) RICH_TA = t;
@@ -2988,36 +3285,116 @@ function openEditChapterSheet(chId) {
     if (!paras.length) return toast('这一章不能是空的', 'err');
     const oldEids = new Set(items.map((e) => e.id));
     const newTexts = [];
-    /* 前 N 段沿用旧段落；多出来的段是新段落 */
-    const keep = Math.min(items.length, paras.length);
-    for (let i = 0; i < keep; i++) {
-      const old = items[i].f['说人话'] || '';
-      items[i].f = Object.assign({}, items[i].f, { '说人话': paras[i] });
-      /* 备份里也要留一份。
-         以前只写进书里（IndexedDB），备份 JSON 里没有——
-         于是换设备导入：批注回来了，字的样子没了。
-         现在同一份改动也记在 store.ent 里，备份带着走。 */
-      setEditedText(items[i].id, paras[i], old);
-      newTexts.push({ eid: items[i].id, text: paras[i] });
+    /* 新段落跟旧内容怎么配对？
+       以前按顺序硬对（第 1 段对第 1 条）：只要段落数一变——
+       中间加了空行、少了一段、编辑器里多敲了个回车——
+       后面就全错位，多出来的段落被当成新条目塞到章末，
+       你的排版就跟着跑到文末去了。
+       现在这样配（见 pairChapterParas）：
+         ① 一字不差的先对上（批注、划线还对得上）
+         ② 一段旧文被拆成好几段 → 认成「拆段」，按新的分法排，
+            绝不能当成「编辑器把字吃了」去补原文
+         ③ 几段旧文并成一段   → 认成「并段」，位置留在原来那段
+         ④ 只剩一截、而且是开头或结尾 → 这种才可能是编辑器吃字，补回来
+         ⑤ 还对不上的：新段落就是新段落，老段落就是删掉
+       配对按「段落」算，归组按「条目」算：
+       一条旧条目里可能有好几段（脂批就是），
+       按条目算的话，一条旧条目会被拆成一堆新条目，批注也找不到家。 */
+    const plainOf = (t) => paraBasis(t || '').replace(/\s+/g, '');
+    const oldParas = [];          // 旧条目摊平成的一段一段
+    items.forEach((e, ei) => {
+      splitParas(view(e).f['说人话'] || '').forEach((p) => {
+        oldParas.push({ ei: ei, eid: e.id, text: p, plain: plainOf(p) });
+      });
+    });
+    const pair = pairChapterParas(oldParas.map((u) => u.plain), paras.map((p) => plainOf(p)));
+    /* 每个新段落归到哪条旧条目 */
+    const homeOf = new Array(paras.length).fill(-1);
+    for (let i = 0; i < paras.length; i++) {
+      const j = pair.pairNew[i];
+      if (j >= 0) { homeOf[i] = oldParas[j].ei; continue; }
+      const sp = pair.splitOf.get(i);        // 被拆开的碎片：还是原来那条
+      if (sp) homeOf[i] = oldParas[sp.old].ei;
     }
-    for (let i = keep; i < paras.length; i++) {
-      const ne = makePlainEntry(b, ci, i, paras[i]);
-      b.entries.push(ne);
-      ALL.push(ne);
-      BY_ID.set(ne.id, ne);
-      setEditedText(ne.id, paras[i], '');       // 新段落也进备份
-      newTexts.push({ eid: ne.id, text: paras[i] });
+    /* 按新正文重建这一章：配上的沿用原来的 id（批注、划线还对得上），
+       没配上的算新段落，位置也留在它该在的地方 */
+    const rebuilt = [];
+    let lostTotal = 0;
+    /* 拆开的段数：提醒用户「这是你拆的，不是编辑器吃的」 */
+    const splitGroups = new Set(), splitPieces = [];
+    for (const info of pair.splitOf.values()) {
+      if (splitGroups.has(info.old)) continue;
+      splitGroups.add(info.old);
+      splitPieces.push(info.total);
     }
-    /* 段数少了：多出来的旧段落删掉 */
-    if (paras.length < items.length) {
-      const drop = new Set(items.slice(paras.length).map((e) => e.id));
-      b.entries = b.entries.filter((e) => !drop.has(e.id));
-      for (const eid of drop) {
-        const i = ALL.findIndex((e) => e.id === eid);
-        if (i > -1) ALL.splice(i, 1);
-        BY_ID.delete(eid);
+    /* 按新段落的顺序重排这一章：
+       挨着属于同一条旧条目的段落，收回同一条（还是一张卡片），
+       剩下没人认领的段落，自己成一条新卡片。 */
+    const usedEntry = new Set();
+    let i = 0;
+    while (i < paras.length) {
+      const ei = homeOf[i];
+      if (ei >= 0 && !usedEntry.has(ei)) {
+        usedEntry.add(ei);
+        const e = items[ei];
+        const old = e.f['说人话'] || '';
+        const group = [];
+        while (i < paras.length && homeOf[i] === ei) { group.push(i); i++; }
+        const texts = group.map((k, n) => {
+          /* 只有「确实是被编辑器吃了字」的那一种（开头或结尾少了一块），
+             才把丢掉的字补回来。
+             被拆开的段落是你自己排的，补回来等于把你排的又抹平了。 */
+          if (n === 0 && pair.truncate.has(k)) {
+            const back = restoreLostText(paras[k], oldParas[pair.pairNew[k]].text, true);
+            if (back) { lostTotal += back.lost; return back.text; }
+          }
+          return paras[k];
+        });
+        const joined = texts.join('\n\n');
+        e.f = Object.assign({}, e.f, { '说人话': joined });
+        /* 备份里也要留一份。
+           以前只写进书里（IndexedDB），备份 JSON 里没有——
+           于是换设备导入：批注回来了，字的样子没了。
+           现在同一份改动也记在 store.ent 里，备份带着走。 */
+        setEditedText(e.id, joined, old);
+        rebuilt.push(e);
+        /* from：这段是从哪条旧条目来的。批注重新对位时优先回原来的段落，
+           免得同样的字在书里出现两遍时，批注跑到别处去。 */
+        newTexts.push({ eid: e.id, text: joined, from: e.id });
+        continue;
       }
+      /* 没人认领的段落：自己成一条 */
+      const e = makePlainEntry(b, ci, i, paras[i]);
+      if (BY_ID.has(e.id)) e.id = e.id + '-n' + (i + 1);   // id 撞了换个
+      ALL.push(e);
+      BY_ID.set(e.id, e);
+      setEditedText(e.id, paras[i], '');       // 新段落也进备份
+      rebuilt.push(e);
+      newTexts.push({ eid: e.id, text: paras[i], from: '' });
+      i++;
     }
+    /* 这一章的条目整体换掉：位置放回原来的地方，别把别的章挤乱 */
+    const firstIdx = b.entries.findIndex((e) => e.chIdx === ci);
+    b.entries = b.entries.filter((e) => e.chIdx !== ci);
+    b.entries.splice(firstIdx < 0 ? b.entries.length : firstIdx, 0, ...rebuilt);
+    /* 一段都没收到的旧条目：删掉 */
+    for (let j = 0; j < items.length; j++) {
+      if (usedEntry.has(j)) continue;
+      const eid = items[j].id;
+      const k = ALL.findIndex((x) => x.id === eid);
+      if (k > -1) ALL.splice(k, 1);
+      BY_ID.delete(eid);
+    }
+    /* 说清楚这一章到底发生了什么：
+       「被编辑器吃字」和「你自己拆开的」是两回事，别混着说。 */
+    const notes = [];
+    if (lostTotal) notes.push('有一段被编辑器弄短了（少了 ' + lostTotal + ' 字），已经补回来');
+    if (splitGroups.size) {
+      let pieces = 0;
+      for (const n of splitPieces) pieces += n;
+      notes.push('有 ' + splitGroups.size + ' 段原文被拆成了 ' + pieces + ' 段，按你排的样子留着');
+    }
+    if (notes.length) toast(notes.join('；'));
     const res = reanchorEntries(oldEids, newTexts);
     /* 删掉的段落在 store.ent 里也别留残渣 */
     for (const eid of oldEids) if (!BY_ID.has(eid) && store.ent[eid]) delete store.ent[eid];
@@ -3140,6 +3517,7 @@ function addBook(file, text) {
   ALL.push(...book.entries);
   HAY && book.entries.forEach((e) => HAY.delete(e.id));
   BOOKS.push(book);
+  realignEdits(book);          // 先导备份、后导书：编号这时才对得上
   const stored = putBook(book);
   if (!db()) {
     toast('这个打开方式存不住大书：书改存在浏览器缓存里（上限约 5MB），换用网址打开就没有这个限制');
@@ -4742,7 +5120,6 @@ function renderMine() {
       '<div class="mine-head-row">' +
         '<h1 class="mine-title mine-name" data-set-name title="点一下改账户名">' +
           (accName ? esc(accName) : '我的') + '</h1>' +
-        '<button class="btn btn-sm" data-io-sheet>导入 / 导出</button>' +
         '<button class="btn btn-sm" data-share-stats>分享</button>' +
       '</div>' +
     '</div>' +
@@ -5114,7 +5491,12 @@ function settingsBodyHTML() {
       '<span class="mi-l">' + title + '</span>' +
       (swOn === undefined ? '' : sw(swOn)) +
     '</button>';
-  return '<h4>外观</h4>' +
+  return '<h4>导入 / 导出</h4>' +
+    '<div class="io-grid2">' +
+      ioTile('io-in', 'up', '导入', '备份 / txt 书') +
+      ioTile('io-out', 'down', '导出', 'Markdown / txt / 备份') +
+    '</div>' +
+    '<h4>外观</h4>' +
     '<div class="theme-grid">' +
     [['light', '纸白', '#f7f6f3', '#1c1b19'], ['dark', '夜黑', '#131419', '#e7e5e0'],
      ['sepia', '米黄', '#f4ece0', '#3a3025'], ['gray', '雾灰', '#eef0f1', '#22282c'],
@@ -5136,11 +5518,6 @@ function settingsBodyHTML() {
     '<div class="menu-list">' +
       row('💧', '正文水印　' + (wmText() || '（还没写内容）'), 'data-wm-edit') +
       row('✍️', '顶栏右上角　' + (creditTag() || '（空着）'), 'data-credit-tag-edit') +
-    '</div>' +
-    '<h4>数据</h4>' +
-    '<div class="menu-list">' +
-      '<button class="menu-item" data-set="backup"><span class="mi-ico">↓</span><span class="mi-l">备份全部数据</span></button>' +
-      '<button class="menu-item" data-set="restore"><span class="mi-ico">↑</span><span class="mi-l">导入备份</span></button>' +
     '</div>' +
     '<h4>危险操作</h4>' +
     '<div class="menu-list">' +
@@ -5228,8 +5605,16 @@ function openMarkGroupSheet(mid) {
   });
 }
 
+/* 设置页开着的时候，记一份：导入导出做完要把这一页也收掉 */
+let SETTINGS_SH = null;
+function closeSettingsSheet() {
+  if (!SETTINGS_SH) return;
+  try { SETTINGS_SH.close(); } catch (e) {}
+  SETTINGS_SH = null;
+}
 function openSettingsSheet() {
   const sh = openSheet('设置', settingsBodyHTML());
+  SETTINGS_SH = sh;
   const body = $('.sheet-body', sh.el);
   const refresh = () => { body.innerHTML = settingsBodyHTML(); };
   window.refreshSettings = refresh;      // 别处改完设置也能刷新这一页
@@ -5302,6 +5687,11 @@ function openSettingsSheet() {
       toast(w.text ? ('水印内容：' + w.text) : '还没设账户名，水印会是空的');
       return;
     }
+    /* 导入 / 导出：细项弹层 */
+    const iin = ev.target.closest('[data-act="io-in"]');
+    if (iin) { openIOSheet('in'); return; }
+    const iout = ev.target.closest('[data-act="io-out"]');
+    if (iout) { openIOSheet('out'); return; }
     const st = ev.target.closest('[data-set]');
     if (!st) return;
     const k = st.dataset.set;
@@ -5485,12 +5875,23 @@ function openEditSheet(id) {
       const get = (k) => richValue(sh, k).trim();
       const title = get('title');
       const of = {};
-      for (const k of FIELDS) { const v = get(k); if (v !== (e.f[k] || '')) of[k] = v; }
+      for (const k of FIELDS) {
+        let v = get(k);
+        if (k === '说人话') {
+          /* 编辑器吃掉的那截，补回来 */
+          const back = restoreLostText(v, f[k] || '', true);
+          if (back) { v = back.text; toast('有一段被编辑器弄短了（少了 ' + back.lost + ' 字），已经补回来'); }
+        }
+        if (v !== (e.f[k] || '')) of[k] = v;
+      }
       const patch = {};
       if (title && title !== e.title) patch.title = title;
       if (Object.keys(of).length) patch.f = of;
-      if (Object.keys(patch).length) { rec(id).e = patch; toast('已保存改写'); }
-      else { delete rec(id).e; toast('已还原原文'); }
+      if (Object.keys(patch).length) {
+        rec(id).e = patch;
+        if (!rec(id).o) rec(id).o = e.f['说人话'] || '';    // 原文存一份
+        toast('已保存改写');
+      } else { delete rec(id).e; toast('已还原原文'); }
       HAY && HAY.delete(id);
       save(); sh.close(); render(true);
     } else if (ev.target.closest('[data-revert]')) {
@@ -5541,13 +5942,15 @@ function startFieldEdit(card, key) {
 /* ---------- 编辑：笔记 ---------- */
 /* ---------- 新增自定义条目 ---------- */
 /* ---------- 导入 txt ---------- */
-function importTXT() {
+function importTXT(done) {
   const inp = document.createElement('input');
   inp.type = 'file';
   inp.accept = '.txt,.text,text/plain';
   inp.addEventListener('change', () => {
     const f = inp.files && inp.files[0];
-    if (f) importTXTFile(f);
+    if (!f) return;
+    if (done) done();          // 选完文件：把设置页也收了
+    importTXTFile(f);
   });
   inp.click();
 }
@@ -5844,20 +6247,6 @@ const stamp = () => new Date().toISOString().slice(0, 10);
 const safeName = (s) => (String(s || 'book').replace(/[\\/:*?"<>|]/g, '_').trim() || 'book').slice(0, 40);
 
 /* 把批注插回原文：紧跟在被标的那句后面，跟屏幕上看到的位置一致 */
-function inlineAnnos(text, annos) {
-  if (!text || !annos || !annos.length) return text;
-  const keyOf = (s) => s.replace(/\s+/g, ' ');
-  const byText = new Map();
-  for (const a of annos) if (!byText.has(keyOf(a.t))) byText.set(keyOf(a.t), a);
-  const re = new RegExp('(' + annos.map((a) => reEsc(a.t).replace(/ /g, '\\s+')).join('|') + ')', 'g');
-  const used = new Set();
-  return text.replace(re, (m0) => {
-    const a = byText.get(keyOf(m0));
-    if (!a || used.has(a.id)) return m0;
-    used.add(a.id);
-    return m0 + '（' + a.b + '）';
-  });
-}
 
 /* 导出我的批注：只导现在在读的这一本，别的书的批注不跟着走 */
 function exportNotes() {
@@ -5911,8 +6300,10 @@ function exportBook() {
       L.push('### ' + c.num + '.' + e.n + ' ' + v.title);
       L.push('<!-- 成本标签: ' + ['钱', '时间', '毅力', '收益', '口径'].map((d) => d + '=' + (v.tags[d] || '')).join(' ') + ' -->');
       // 说人话里把批注插回原位：紧跟在被标的那句后面
-      for (const k of FIELDS) if (v.f[k]) L.push('- ' + k + '：' + (k === '说人话' ? richToMarkdown(inlineAnnos(v.f[k], annosOf(e.id))) : v.f[k]));
-      for (const a of annosOf(e.id)) L.push('- 我的批注（就着「' + a.t + '」）：' + a.b);
+      for (const k of FIELDS) if (v.f[k]) L.push('- ' + k + '：' + (k === '说人话' ? richToMarkdown(v.f[k]) : v.f[k]));
+      /* 批注单独一行、灰字：以前是插在正文里的，
+         会被正文的颜色带着走（批注和被批的字一个颜色），还把阅读打断了 */
+      for (const a of annosOf(e.id)) L.push('- <span style="color:#8a8a8a">' + esc(a.b) + '</span>');
       for (const m of marksOf(e.id)) L.push('- 我的划线：' + m.t);
       const n = noteOf(e.id);
       if (n) L.push('- 我的笔记：' + n);
@@ -5947,17 +6338,34 @@ function exportBookText(b, md) {
     const items = (b.entries || []).filter((e) => e.chIdx === ci);
     for (const e of items) {
       const la = annosOf(e.id);
-      const body = inlineAnnos(view(e).f['说人话'] || '', la);   // 导出的要是改写后的正文
-      L.push(md ? richToMarkdown(body) : paraBasis(body), '');
+      const body = view(e).f['说人话'] || '';          // 导出的要是改写后的正文
+      /* 批注要放在「被批那句话所在的那一段」后面：
+         一条里可能有十几段（改写整章后每段一行），
+         统一堆在最后面的话，读者根本翻不到。 */
+      const paras = String(body).split(/\n{2,}/);
+      const at = new Map();
+      for (const a of la) {
+        const key = String(a.t || '').replace(/\s+/g, ' ');
+        let idx = -1;
+        for (let i = 0; i < paras.length; i++) {
+          if (paraBasis(paras[i]).replace(/\s+/g, ' ').indexOf(key) >= 0) { idx = i; break; }
+        }
+        if (idx < 0) idx = paras.length - 1;
+        if (!at.has(idx)) at.set(idx, []);
+        at.get(idx).push(a);
+      }
+      paras.forEach((p, i) => {
+        L.push(md ? richToMarkdown(p) : paraBasis(p), '');
+        /* 批注独立成块、灰字：不插进正文中间（会被正文颜色带着走） */
+        for (const a of (at.get(i) || [])) {
+          L.push(md ? ('<span style="color:#8a8a8a">' + esc(a.b) + '</span>') : ('（批注）' + a.b), '');
+        }
+      });
       for (const a of la) annos.push({ a: a, ci: ci });
       for (const m of marksOf(e.id)) marks.push({ m: m, ci: ci });
     }
   }
-  if (annos.length) {
-    L.push('—— 我的批注 ——', '');
-    annos.forEach((x, i) => L.push((i + 1) + '. 「' + x.a.t + '」→ ' + x.a.b + '（第 ' + (x.ci + 1) + ' 章）'));
-    L.push('');
-  }
+  /* 批注已经紧跟在对应段落后面了，这里不再重复列一遍 */
   if (marks.length) {
     L.push('—— 我的划线 ——', '');
     for (const x of marks) L.push('- 「' + x.m.t + '」（第 ' + (x.ci + 1) + ' 章）');
@@ -5977,8 +6385,32 @@ function exportCurrentBook() {
 /* 同一本书，导出成干净的纯文本 */
 function exportCurrentBookText() {
   const bk = curBook();
-  if (bk.builtin) return exportBook();
+  if (bk.builtin) return exportBuiltinText();
   return exportBookText(bk, false);
+}
+/* 内嵌书也要能导纯文本：原来这一项对内嵌书吐的是 md，
+   标签写着「txt · 只要字」，拿到的却是带井号的 Markdown。 */
+function exportBuiltinText() {
+  const L = ['《' + BUILTIN().name + '》', '', '导出日期：' + stamp(), ''];
+  for (const c of CHAPTERS) {
+    L.push('第 ' + c.num + ' 章 ' + c.title, '');
+    if (c.intro) L.push(paraBasis(c.intro), '');   // 纯文本：别把 ** 这样的记号漏出去
+    for (const e of (BY_CH.get(c.id) || [])) {
+      const v = view(e);
+      L.push(v.title, '');
+      for (const k of FIELDS) if (v.f[k]) L.push(k + '：' + paraBasis(v.f[k]), '');
+      L.push('');
+    }
+  }
+  L.push('——', '来源：' + D.meta.source, '许可：' + D.meta.license);
+  dl(safeName(BUILTIN().name) + '-' + stamp() + '.txt', L.join('\n'), 'text/plain;charset=utf-8');
+}
+/* 导「当前在读的这本书」：以前不管读哪本，导出来的都是内嵌的那本
+   （exportBook 写死了内嵌书的内容），这���改成按当前书来。 */
+function exportCurrentBookMD() {
+  const bk = curBook();
+  if (bk.builtin) return exportBook();
+  return exportBookText(bk, true);
 }
 
 function exportJSON() {
@@ -5992,12 +6424,13 @@ function exportJSON() {
   dl('lifebook-backup-' + stamp() + '.json', JSON.stringify(payload, null, 2), 'application/json;charset=utf-8');
 }
 
-function importJSON() {
+function importJSON(done) {
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = '.json,application/json';
   inp.addEventListener('change', () => {
     const file = inp.files && inp.files[0];
     if (!file) return;
+    if (done) done();          // 选完文件：把设置页也收了
     const fr = new FileReader();
     fr.onload = () => {
       try {
@@ -6005,9 +6438,17 @@ function importJSON() {
         if (!d || d.app !== 'lifebook' || !d.ent) throw new Error('格式不对');
         let n = 0, c = 0;
         for (const [id, r] of Object.entries(d.ent || {})) {
-          store.ent[id] = Object.assign({}, store.ent[id], r);
+          const prev = store.ent[id] || {};
+          const merged = Object.assign({}, prev, r);
+          if (!merged.o && prev.o) merged.o = prev.o;     // 备份没带原文就还用本地这份
+          store.ent[id] = merged;
           n++;
         }
+        // 备份里的段落编号可能已经错位（改过章节就会错），按文字搬回去
+        realignEdits();
+        // 再自检一遍：改写要是只剩原文的一截，把丢的字按原文补回来
+        const healed = repairTruncatedEdits();
+        if (healed) toast('有 ' + healed + ' 段只剩一截（以前改写时丢的字），已经按原文补回');
         const have = new Set(store.custom.map((x) => x.id));
         for (const item of d.custom || []) {
           if (have.has(item.id)) continue;
@@ -6072,6 +6513,58 @@ function importJSON() {
     fr.readAsText(file);
   });
   inp.click();
+}
+
+/* ---------- 段落编号错位时，把改动搬回对的段上 ----------
+   导入的书，段落编号是按位置给的（k0-0、k0-1……）。
+   只要章节里加过、删过段，或者整章改写过，编号就整体错位——
+   备份里「第三段」那份样式，落到现在的书上就变成了今天的第三段（可能是别的东西），
+   于是样式贴错地方，还把原来的正文盖掉。
+   所以导入之后按文字重新对一遍：对得上的，搬到它该在的那条上去。 */
+function realignEdits(book) {
+  const b = book || curBook();
+  if (!b || b.builtin) return 0;
+  const items = b.entries || [];
+  if (!items.length) return 0;
+  const norm = (t) => paraBasis(t || '').replace(/\s+/g, '');
+  const ids = Object.keys(store.ent).filter((id) => {
+    const r = store.ent[id];
+    return r && r.e && r.e.f && r.e.f['说人话'];
+  });
+  if (!ids.length) return 0;
+  let plain = null;                       // 只有真要搬的时候才把全书的字都算一遍
+  const textOf = (eid) => {
+    if (!plain) {
+      plain = new Map();
+      for (const it of items) plain.set(it.id, norm(it.f && it.f['说人话']));
+    }
+    return plain.get(eid);
+  };
+  let moved = 0;
+  for (const id of ids) {
+    const r0 = store.ent[id];
+    const want = norm(r0.e.f['说人话']);
+    if (!want || want.length < 6) continue;
+    const e = BY_ID.get(id);
+    if (!e) continue;                     // 这条段落已经不在了
+    const cur = norm(e.f && e.f['说人话']);
+    if (cur === want) continue;                           // 对得上，不动
+    if (cur && (cur.indexOf(want) > -1 || want.indexOf(cur) > -1)) continue;  // 也对得上
+    // 对不上：去找文字真正对应的那一段（取最贴合的那条）
+    let hit = null, hitLen = 0;
+    for (const it of items) {
+      const t = textOf(it.id);
+      if (!t) continue;
+      if (t.indexOf(want) > -1 || want.indexOf(t) > -1) {
+        if (t.length > hitLen) { hit = it.id; hitLen = t.length; }
+      }
+    }
+    if (!hit || hit === id) continue;
+    store.ent[hit] = Object.assign({}, store.ent[hit] || {}, r0);
+    delete store.ent[id];
+    moved++;
+  }
+  return moved;
 }
 
 /* ---------- 事件绑定 ---------- */
@@ -7701,7 +8194,6 @@ function bind() {
     if (bmore) { openBookMenu(bmore.dataset.bookMore); return; }
 
     // 我的
-    if (t.closest('[data-io-sheet]')) { openIOSheet(); return; }
     if (t.closest('[data-set-name]')) { openNameSheet(); return; }
     if (t.closest('[data-share-stats]')) { shareStatsImage(); return; }
     const statb = t.closest('[data-stat]');
@@ -8153,6 +8645,9 @@ document.addEventListener('click', (ev) => {
   if (chip) pickMark(chip, 'anno');
 });
 
+/* 「导入 / 导出」这个入口现在在设置面板里。
+   设置面板挂在 #layer 上，不在 #main 里——处理要是还绑在 #main 上，
+   点它就没人接，看着像摆设。所以这里挂在 document 上。 */
 /* ---------- 点画线 / 批注：选中它，浮出工具条 ---------- */
 function hideMarkBar() {
   SEL_MK = null;
@@ -9649,74 +10144,75 @@ function drawAnnoLine(ctx, ln, qS, qE, fs, fontBase, tx, y) {
   return badge;
 }
 function drawAnnoCard(note, quote, eid) {
-  const W = 1440, H = 1080, PAD = 110;
+  const W = 1440, PAD = 110;
   const SERIF = '"Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif';
   const SANS = '-apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif';
   const cv = document.createElement('canvas');
   const ctx = cv.getContext('2d');
-  cv.width = W * 2; cv.height = H * 2;
-  ctx.scale(2, 2);
   ctx.textBaseline = 'alphabetic';
 
   const e = BY_ID.get(eid);
   const c = entryChapter(e);
   const bookName = bookNameOf(e);
   const where = c ? (c.custom ? '我加的条目' : c.num + ' · ' + String(c.title || '').replace(/^#+\s*/, '')) : '';
-  const src = richPlain(((view(e) || {}).f['说人话'] || quote || '')).replace(/\s+/g, ' ').trim();
+  let src = richPlain(((view(e) || {}).f['说人话'] || quote || '')).replace(/\s+/g, ' ').trim();
   const q = richPlain(quote || '').replace(/\s+/g, ' ').trim();
-  const qS = q ? src.indexOf(q) : -1;
-  const qE = qS >= 0 ? qS + q.length : -1;
+  let qS = q ? src.indexOf(q) : -1;
+  let qE = qS >= 0 ? qS + q.length : -1;
+  /* 原文只截被批那句话前后一小段。
+     整段贴上来，批注就被挤没了（气泡里只看得见半句）。 */
+  if (qS < 0) {
+    src = src.slice(0, 90) + (src.length > 90 ? '…' : '');
+  } else {
+    const L = 24, R = 52;
+    const s0 = Math.max(0, qS - L);
+    const e0 = Math.min(src.length, qE + R);
+    const pre = s0 > 0 ? '…' : '';
+    const post = e0 < src.length ? '…' : '';
+    src = pre + src.slice(s0, e0) + post;
+    qS = pre.length + (qS - s0);
+    qE = qS + q.length;
+  }
+
+  /* 排版：先量好每块要多少行，再定画布多高（内容多长都不裁） */
+  const tFS = 40, tLH = 68, tTop = 170;
+  ctx.font = tFS + 'px ' + SERIF;
+  const lines = wrapTextIdx(ctx, src, W - PAD * 2);
+  /* 批注：灰字，字号随长度自适应，整段都放出来 */
+  let nFS = 32, nLH = 50, nLines = [];
+  for (const fs of [32, 30, 28, 26, 24, 22]) {
+    ctx.font = fs + 'px ' + SANS;
+    nLines = wrapText(ctx, String(note || ''), W - PAD * 2);
+    nFS = fs; nLH = Math.round(fs * 1.55);
+    if (nLines.length <= 6) break;
+  }
+  if (!nLines.length) nLines = [''];
+  const nTop = tTop + lines.length * tLH + 74;      // 原文下面空一截，再放批注
+  const H = nTop + nLines.length * nLH + 150;
+  cv.width = W * 2; cv.height = H * 2;
+  ctx.scale(2, 2);
+  ctx.textBaseline = 'alphabetic';
 
   /* 纸底 */
   ctx.fillStyle = '#F6F2E8';
   ctx.fillRect(0, 0, W, H);
 
-  /* ---- 气泡：深底白字，写的是我写的那句话 ---- */
-  const nFS = 40, nLH = 62, nPad = 42;
-  ctx.font = nFS + 'px ' + SANS;
-  let nLines = wrapText(ctx, String(note || ''), W - PAD * 2 - nPad * 2);
-  if (!nLines.length) nLines = [''];
-  if (nLines.length > 5) { nLines = nLines.slice(0, 5); nLines[4] = nLines[4].slice(0, -1) + '…'; }
-  const bH = nLines.length * nLH + nPad * 2 - 10;
-  const bX = PAD, bY = 170, bW = W - PAD * 2;
-  ctx.fillStyle = '#2B2C31';
-  annoRoundRect(ctx, bX, bY, bW, bH, 34);
-  ctx.fill();
-  /* 气泡里的字 */
-  ctx.fillStyle = '#F4F3F0';
-  ctx.font = nFS + 'px ' + SANS;
-  ctx.textAlign = 'left';
-  let ny = bY + nPad + nFS * 0.85;
-  for (const ln of nLines) { ctx.fillText(ln, bX + nPad, ny); ny += nLH; }
-
   /* ---- 原文：被批的那几个字亮出来，后面跟「批」字徽标 ---- */
-  const tTop = bY + bH + 28 + 86;
-  const tFS = 40, tLH = 68;
+  ctx.fillStyle = '#1C1B19';
   ctx.font = tFS + 'px ' + SERIF;
-  let lines = wrapTextIdx(ctx, src, W - PAD * 2);
-  const maxL = Math.max(1, Math.floor((H - tTop - 190) / tLH));
-  if (lines.length > maxL) {
-    lines = lines.slice(0, maxL);
-    const last = lines[lines.length - 1];
-    if (last && last.str && last.str.length > 1) { last.str = last.str.slice(0, -1) + '…'; last.chars = last.chars.slice(0, -1); }
-  }
+  ctx.textAlign = 'left';
   let ty = tTop + tFS * 0.9;
-  let badge = null;
   for (const ln of lines) {
-    const b2 = drawAnnoLine(ctx, ln, qS, qE, tFS, SERIF, PAD, ty);
-    if (b2) badge = b2;
+    drawAnnoLine(ctx, ln, qS, qE, tFS, SERIF, PAD, ty);
     ty += tLH;
   }
-  /* 尖角：正对着下面那个「批」字徽标 */
-  if (badge) {
-    ctx.fillStyle = '#2B2C31';
-    ctx.beginPath();
-    ctx.moveTo(badge.bx - 24, bY + bH - 2);
-    ctx.lineTo(badge.bx + 24, bY + bH - 2);
-    ctx.lineTo(badge.bx, badge.by - badge.r - 10);
-    ctx.closePath();
-    ctx.fill();
-  }
+
+  /* ---- 批注：灰字，另起一块（跟导出的样式一致） ---- */
+  ctx.fillStyle = '#6E6A63';
+  ctx.font = nFS + 'px ' + SANS;
+  ctx.textAlign = 'left';
+  let ny = nTop + nFS * 0.9;
+  for (const ln of nLines) { ctx.fillText(ln, PAD, ny); ny += nLH; }
 
   /* ---- 落款：书名、章节、账户名 ---- */
   const name = (store.ui.name || '').trim();
@@ -9814,29 +10310,32 @@ function ioTile(act, ico, t, s) {
     '<span class="io-tile-t">' + t + '</span>' +
     '<span class="io-tile-s">' + s + '</span></button>';
 }
-function openIOSheet() {
+/* 导入 / 导出的细项。现在入口（导入 / 导出两个格子）直接摆在设置面板里，
+   这一层只列具体动作，不写说明文字了。 */
+function openIOSheet(mode) {
   const bk = curBook();
-  const sh = openSheet('导入 / 导出', '<p style="font-size:12.5px;color:var(--muted)">你的批注只存在这台设备上。换设备、备份、或者分享给别人，用下面的导出。</p>' +
-    '<div class="io-grid2">' +
-    ioTile('dl-book', 'down', '导出这本书', bk.builtin ? 'Markdown' : 'Markdown · 带样式') +
-    ioTile('up-json', 'up', '导入备份', 'JSON · 合并') +
-    ioTile('dl-book-txt', 'down', '导出纯文本', 'txt · 只要字') +
-    ioTile('import-txt', 'up', '导入 txt 书', 'txt 文件') +
-    ioTile('dl-notes', 'down', '导出我的批注', 'Markdown') +
-    ioTile('dl-json', 'down', '备份全部数据', 'JSON') +
-    '</div>');
+  const isIn = mode === 'in';
+  const tiles = isIn
+    ? ioTile('up-json', 'up', '导入备份', 'JSON · 合并') +
+      ioTile('import-txt', 'up', '导入 txt 书', 'txt 文件')
+    : ioTile('dl-book', 'down', '导出这本书', bk.builtin ? 'Markdown' : 'Markdown · 带样式') +
+      ioTile('dl-book-txt', 'down', '导出纯文本', 'txt · 只要字') +
+      ioTile('dl-notes', 'down', '导出我的批注', 'Markdown') +
+      ioTile('dl-json', 'down', '备份全部数据', 'JSON');
+  const sh = openSheet(isIn ? '导入' : '导出', '<div class="io-grid2">' + tiles + '</div>');
   sh.el.addEventListener('click', (ev) => {
     const b = ev.target.closest('[data-act]');
     if (!b) return;
     const k = b.dataset.act;
-    if (k === 'dl-notes') exportNotes();
-    else if (k === 'dl-book') exportBook();
-    else if (k === 'dl-book-txt') exportCurrentBookText();
-    else if (k === 'dl-json') exportJSON();
-    else if (k === 'up-json') importJSON();
-    else if (k === 'import-txt') { sh.close(); importTXT(); return; }
-    if (k !== 'up-json') sh.close();
+    if (k === 'dl-notes') { exportNotes(); sh.close(); closeSettingsSheet(); }
+    else if (k === 'dl-book') { exportCurrentBookMD(); sh.close(); closeSettingsSheet(); }  // 导当前在读的这本
+    else if (k === 'dl-book-txt') { exportCurrentBookText(); sh.close(); closeSettingsSheet(); }
+    else if (k === 'dl-json') { exportJSON(); sh.close(); closeSettingsSheet(); }
+    /* 导入：选完文件就把设置页也收了，别把人留在设置里 */
+    else if (k === 'up-json') { sh.close(); importJSON(closeSettingsSheet); }
+    else if (k === 'import-txt') { sh.close(); importTXT(closeSettingsSheet); }
   });
+  return sh;
 }
 function openGradeSheet() {
   openSheet('证据分级', md(D.meta.grading));
@@ -10039,6 +10538,12 @@ async function boot() {
 
   scopeBookIds();     // 先把老书的段落 id 修好，别让批注串书
   registerBooks();    // 再登记进索引
+  let moved = 0;
+  for (const b of BOOKS) {
+    moved += realignEdits(b);         // 每本书的编号都对一遍
+    moved += repairTruncatedEdits(b); // 只剩一截的改写，按原文补回
+  }
+  if (moved) { saveNow(); toast('有 ' + moved + ' 处改动被对回去了（段落错位或被编辑器吃掉的字）'); }
   migrateThinks();    // 「想法」已经并进「批注」，老数据别丢
   // 以前能「按原页读」的书（PDF / 图片），原页功能已经去掉，统一按文字读
   for (const b of BOOKS) {
