@@ -962,6 +962,23 @@ mark { background: color-mix(in srgb, var(--star) 32%, transparent); color: inhe
 .tool-off { opacity: .45; }
 
 .io-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 9px; margin: 12px 0; }
+/* 导入/导出：两列一排，一个导出一个导入 */
+.io-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0 4px; }
+.io-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: 11px 12px 12px; border: 1px solid var(--border); border-radius: 11px;
+  background: var(--surface-2); text-align: left; cursor: pointer;
+  transition: border-color .13s, background .13s;
+}
+.io-tile:hover { border-color: var(--border-strong); background: var(--bg-sunken); }
+.io-tile:active { background: var(--bg-sunken); }
+.io-tile-ico {
+  width: 27px; height: 27px; border-radius: 8px; display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent-text); margin-bottom: 2px;
+}
+.io-tile-ico.up { background: color-mix(in srgb, var(--star) 16%, transparent); color: var(--star); }
+.io-tile-t { font-size: 13.5px; font-weight: 600; color: var(--text); line-height: 1.4; }
+.io-tile-s { font-size: 11.5px; color: var(--faint); line-height: 1.4; }
 .io-item {
   display: flex; align-items: flex-start; gap: 10px; padding: 13px 14px; text-align: left;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -2955,7 +2972,8 @@ function openEditChapterSheet(chId) {
   if (!isBookEditable(b)) return toast('先在设置里打开这本书的「改正文」', 'err');
   const items = ch.items || [];
   if (!items.length) return toast('这一章没有内容', 'err');
-  const text = items.map((e) => e.f['说人话'] || '').join('\n\n');
+  /* 显示的是「现在看到的正文」（含以前改过的），不是书里的原文 */
+  const text = items.map((e) => (view(e).f['说人话'] || '')).join('\n\n');
   const ci = Number(String(ch.id).split(':')[1] || 0);
   const sh = openSheet('改写「' + String(ch.title || '').replace(/^#+\s*/, '') + '」',
     '<div class="rich-edit" contenteditable="true" spellcheck="false" data-rich data-fld="text">' + richEditorHTML(text) + '</div>',
@@ -2973,7 +2991,13 @@ function openEditChapterSheet(chId) {
     /* 前 N 段沿用旧段落；多出来的段是新段落 */
     const keep = Math.min(items.length, paras.length);
     for (let i = 0; i < keep; i++) {
+      const old = items[i].f['说人话'] || '';
       items[i].f = Object.assign({}, items[i].f, { '说人话': paras[i] });
+      /* 备份里也要留一份。
+         以前只写进书里（IndexedDB），备份 JSON 里没有——
+         于是换设备导入：批注回来了，字的样子没了。
+         现在同一份改动也记在 store.ent 里，备份带着走。 */
+      setEditedText(items[i].id, paras[i], old);
       newTexts.push({ eid: items[i].id, text: paras[i] });
     }
     for (let i = keep; i < paras.length; i++) {
@@ -2981,6 +3005,7 @@ function openEditChapterSheet(chId) {
       b.entries.push(ne);
       ALL.push(ne);
       BY_ID.set(ne.id, ne);
+      setEditedText(ne.id, paras[i], '');       // 新段落也进备份
       newTexts.push({ eid: ne.id, text: paras[i] });
     }
     /* 段数少了：多出来的旧段落删掉 */
@@ -5960,6 +5985,7 @@ function exportJSON() {
   const payload = {
     app: 'lifebook', v: 1, exported: new Date().toISOString(),
     ent: store.ent, custom: store.custom, marks: store.marks, ui: store.ui,
+    thinks: store.thinks || [],        // 老数据里的「想法」：导入那边认这个
     dwell: store.dwell, ttsMs: store.ttsMs, bookIds: store.bookIds || {},
     stats: store.stats || {}, chTime: store.chTime || {},   // 按天的阅读统计：总时长靠它
   };
@@ -9778,15 +9804,26 @@ function cycleTheme() {
   applyTheme(); save();
   toast('配色：' + ({ auto: '跟随系统', light: '浅色', dark: '深色' })[store.ui.theme]);
 }
+/* 导入/导出面板里的一格 */
+function ioTile(act, ico, t, s) {
+  const p = { down: '<path d="M12 3v12M7 11l5 5 5-5M4 20h16"/>', up: '<path d="M12 17V5M7 9l5-5 5 5M4 20h16"/>' }[ico] || '';
+  return '<button class="io-tile" data-act="' + act + '">' +
+    '<span class="io-tile-ico' + (ico === 'up' ? ' up' : '') + '">' +
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round">' + p + '</svg></span>' +
+    '<span class="io-tile-t">' + t + '</span>' +
+    '<span class="io-tile-s">' + s + '</span></button>';
+}
 function openIOSheet() {
   const bk = curBook();
-  const sh = openSheet('导入 / 导出', '<p>你的批注只存在这台设备上。换设备、备份、或者分享给别人，用下面的导出。</p>' +
-    '<div class="io-grid">' +
-    ioBtn('dl-book', 'down', '导出这本书', bk.builtin ? '《' + D.meta.title + '》Markdown，笔记内嵌' : '《' + bk.name + '》Markdown，样式和批注都在') +
-    ioBtn('dl-book-txt', 'down', '导出纯文本', '《' + bk.name + '》txt，只要字，不要任何标记') +
-    ioBtn('dl-notes', 'down', '导出我的批注', 'Markdown，只含《' + bk.name + '》的') +
-    ioBtn('dl-json', 'down', '备份全部数据', 'JSON，可再导入') +
-    ioBtn('up-json', 'up', '导入备份', '合并到当前数据') +
+  const sh = openSheet('导入 / 导出', '<p style="font-size:12.5px;color:var(--muted)">你的批注只存在这台设备上。换设备、备份、或者分享给别人，用下面的导出。</p>' +
+    '<div class="io-grid2">' +
+    ioTile('dl-book', 'down', '导出这本书', bk.builtin ? 'Markdown' : 'Markdown · 带样式') +
+    ioTile('up-json', 'up', '导入备份', 'JSON · 合并') +
+    ioTile('dl-book-txt', 'down', '导出纯文本', 'txt · 只要字') +
+    ioTile('import-txt', 'up', '导入 txt 书', 'txt 文件') +
+    ioTile('dl-notes', 'down', '导出我的批注', 'Markdown') +
+    ioTile('dl-json', 'down', '备份全部数据', 'JSON') +
     '</div>');
   sh.el.addEventListener('click', (ev) => {
     const b = ev.target.closest('[data-act]');
@@ -9797,6 +9834,7 @@ function openIOSheet() {
     else if (k === 'dl-book-txt') exportCurrentBookText();
     else if (k === 'dl-json') exportJSON();
     else if (k === 'up-json') importJSON();
+    else if (k === 'import-txt') { sh.close(); importTXT(); return; }
     if (k !== 'up-json') sh.close();
   });
 }
